@@ -3,14 +3,14 @@
 <div align="center">
 
 [![100% AI Generated](https://img.shields.io/badge/100%25-AI%20Generated-8A2BE2?style=for-the-badge&logo=openai&logoColor=white)](https://github.com/mshgrzyny60-cmd/DexXP)
-[![Android](https://img.shields.io/badge/Android-12%20--%2015-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://android.com)
+[![Android](https://img.shields.io/badge/Android-12%20--%2017+-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://android.com)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0.0-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack%20Compose%20M3-4285F4?style=for-the-badge&logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
 [![No Root Required](https://img.shields.io/badge/Root-Not%20Required-success?style=for-the-badge)](https://github.com/mshgrzyny60-cmd/DexXP)
 [![Download APK](https://img.shields.io/github/v/release/mshgrzyny60-cmd/DexXP?label=Download%20APK&style=for-the-badge&logo=android&color=brightgreen)](https://github.com/mshgrzyny60-cmd/DexXP/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
-**An ultra-lightweight, commercial-grade open-source Samsung DeX alternative for standard unrooted Android 12–15 (`API 31`–`API 35`) devices.**
+**An ultra-lightweight, commercial-grade open-source Samsung DeX alternative for standard unrooted Android 12–17+ (`API 31`–`API 36+`) devices.**
 
 *Supports USB-C DisplayPort Alt-Mode, HDMI, Wireless Cast / Miracast, and Standalone On-Device Landscape Desktop.*
 
@@ -34,7 +34,7 @@ For years, desktop productivity on Android was either locked behind **vendor exc
 - **PC-mirroring tools (e.g. scrcpy)** require an expensive host laptop/desktop PC and cannot operate standalone.
 - **Hardware constraints:** Millions of modern phones (Xiaomi, Redmi, Poco, older Pixels) ship with USB 2.0 ports without physical DisplayPort Alt-Mode wiring.
 
-**DexXP solves this without Root**, combining modern Android 12–15 APIs into a cohesive, lightning-fast desktop shell designed in Material Design 3.
+**DexXP solves this without Root**, combining modern Android 12–17+ APIs into a cohesive, lightning-fast desktop shell designed in Material Design 3.
 
 ---
 
