@@ -7,6 +7,7 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0.0-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack%20Compose%20M3-4285F4?style=for-the-badge&logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
 [![No Root Required](https://img.shields.io/badge/Root-Not%20Required-success?style=for-the-badge)](https://github.com/mshgrzyny60-cmd/DexXP)
+[![Download APK](https://img.shields.io/github/v/release/mshgrzyny60-cmd/DexXP?label=Download%20APK&style=for-the-badge&logo=android&color=brightgreen)](https://github.com/mshgrzyny60-cmd/DexXP/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
 **An ultra-lightweight, commercial-grade open-source Samsung DeX alternative for standard unrooted Android 12–15 (`API 31`–`API 35`) devices.**
