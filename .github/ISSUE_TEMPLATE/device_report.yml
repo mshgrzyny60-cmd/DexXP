@@ -1,0 +1,49 @@
+name: 📱 Device Compatibility Report
+description: Report whether DexXP works on your specific Android phone/tablet model
+title: "[Device]: <Brand & Model> (Android <Version>)"
+labels: ["device-compatibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for testing DexXP! Please share your hardware and software setup below so other users can know compatibility status.
+  - type: input
+    id: device_model
+    attributes:
+      label: Device Brand & Model
+      placeholder: "e.g. Xiaomi 11T, Google Pixel 8, Motorola Edge 40"
+    validations:
+      required: true
+  - type: input
+    id: android_version
+    attributes:
+      label: Android OS Version & Skin
+      placeholder: "e.g. Android 14 (HyperOS 1.0.4), Android 15 (Stock Pixel)"
+    validations:
+      required: true
+  - type: dropdown
+    id: connection_mode
+    attributes:
+      label: How did you connect/test?
+      options:
+        - "Standalone On-Device (Desktop View Tab)"
+        - "USB-C to HDMI / DisplayPort Cable"
+        - "Wireless Cast (Miracast / Chromecast)"
+        - "DisplayLink / Active USB Adapter"
+    validations:
+      required: true
+  - type: dropdown
+    id: working_status
+    attributes:
+      label: Working Status
+      options:
+        - "🟢 Works Flawlessly (Freeform windows, pointer, keyboard, audio)"
+        - "🟡 Works with Minor Issues"
+        - "🔴 Video Output / Freeform Not Working"
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes & ADB Flags Used
+      placeholder: "Did you need to enable 'Force activities to be resizable' or anything else?"
