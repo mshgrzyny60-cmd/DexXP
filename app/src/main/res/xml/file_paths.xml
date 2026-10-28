@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <external-files-path
+        name="dexxp_desktop_files"
+        path="Desktop/" />
+    <external-files-path
+        name="dexxp_external_root"
+        path="." />
+    <cache-path
+        name="dexxp_cache"
+        path="." />
+</paths>

@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">DexXP Desktop</string>
+    <string name="secondary_home_label">DexXP Secondary Desktop</string>
+    <string name="notification_channel_name">Desktop Display Engine</string>
+    <string name="notification_channel_desc">Monitors HDMI, DisplayPort Alt-Mode, and Wireless secondary displays for DexXP Desktop Mode.</string>
+    <string name="accessibility_service_label">DexXP Pointer, Keyboard &amp; Multi-Window Bridge</string>
+    <string name="accessibility_service_description">Enables non-root virtual trackpad clicks, hardware keyboard shortcuts (Alt+Tab, Super), IME relay, and freeform window tracking across external displays.</string>
+    <string name="notification_listener_label">DexXP Desktop Notification Mirror</string>
+</resources>

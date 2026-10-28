@@ -1,0 +1,486 @@
+package com.dexxp.desktop.launcher
+
+import android.app.ActivityManager
+import android.app.ActivityOptions
+import android.content.Context
+import android.content.Intent
+import android.graphics.Rect
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.provider.Settings
+import android.util.Log
+import android.view.Display
+import com.dexxp.desktop.SecondaryDesktopActivity
+import com.dexxp.desktop.bridge.DesktopPointerAccessibilityService
+import com.dexxp.desktop.model.DesktopAppItem
+import com.dexxp.desktop.model.ExternalDisplayInfo
+import com.dexxp.desktop.model.RunningWindowRecord
+import com.dexxp.desktop.model.WindowSnapMode
+import com.dexxp.desktop.state.DesktopSessionRepository
+import com.dexxp.desktop.windowing.WindowSnappingController
+import java.lang.reflect.Method
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.roundToInt
+
+/**
+ * Orchestrates Freeform Multi-Window application launches, snapping, quadrant tiling,
+ * single-window minimize/maximize/close (`WindowTitlebarOverlayController`), and
+ * `Super + D` desktop minimize/restore onto secondary external displays.
+ */
+class AppLauncher(
+    context: Context,
+    private val sessionRepository: DesktopSessionRepository,
+    private val appRepository: AppRepository,
+    private val snappingController: WindowSnappingController
+) {
+    private val appContext = context.applicationContext
+    private val cascadeCounter = AtomicInteger(0)
+    private val rememberedBounds = ConcurrentHashMap<String, Rect>()
+
+    private val setLaunchWindowingModeMethod: Method? by lazy {
+        runCatching {
+            ActivityOptions::class.java.getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)
+        }.getOrNull()
+    }
+
+    fun launchApp(
+        app: DesktopAppItem,
+        snapMode: WindowSnapMode = WindowSnapMode.FREEFORM_CASCADED,
+        newInstance: Boolean = false,
+        launchContext: Context? = null
+    ): Boolean {
+        val displayInfo = sessionRepository.activeDisplay.value
+        val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
+
+        val intent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+            component = app.componentName
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+            if (newInstance) {
+                addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT)
+            }
+        }
+
+        val bounds = computeWindowBounds(
+            packageName = app.packageName,
+            displayInfo = displayInfo,
+            snapMode = snapMode
+        )
+
+        val optionsBundle = buildFreeformActivityOptions(
+            targetDisplayId = targetDisplayId,
+            launchBounds = if (targetDisplayId != Display.DEFAULT_DISPLAY) bounds else null
+        )
+
+        val dispatcherContext = launchContext ?: appContext
+        return runCatching {
+            dispatcherContext.startActivity(intent, optionsBundle)
+            if (targetDisplayId != Display.DEFAULT_DISPLAY) {
+                if (snapMode == WindowSnapMode.FREEFORM_CASCADED) {
+                    rememberedBounds[app.packageName] = Rect(bounds)
+                }
+                sessionRepository.recordWindowLaunched(
+                    packageName = app.packageName,
+                    activityName = app.activityName,
+                    label = app.label,
+                    bounds = bounds,
+                    snapMode = snapMode,
+                    displayId = targetDisplayId
+                )
+            }
+            true
+        }.onFailure { err ->
+            Log.e(TAG, "Failed launching ${app.uniqueKey} on display $targetDisplayId", err)
+        }.getOrDefault(false)
+    }
+
+    fun launchCustomIntentInFreeform(
+        intent: Intent,
+        recordPackageKey: String,
+        label: String,
+        customBounds: Rect?,
+        snapMode: WindowSnapMode = WindowSnapMode.FREEFORM_CASCADED,
+        launchContext: Context? = null
+    ): Boolean {
+        val displayInfo = sessionRepository.activeDisplay.value
+        val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
+        val effectiveBounds = customBounds ?: computeWindowBounds(recordPackageKey, displayInfo, snapMode)
+        val optionsBundle = buildFreeformActivityOptions(
+            targetDisplayId = targetDisplayId,
+            launchBounds = if (targetDisplayId != Display.DEFAULT_DISPLAY) effectiveBounds else null
+        )
+
+        return runCatching {
+            (launchContext ?: appContext).startActivity(intent, optionsBundle)
+            if (targetDisplayId != Display.DEFAULT_DISPLAY) {
+                if (snapMode == WindowSnapMode.FREEFORM_CASCADED) {
+                    rememberedBounds[recordPackageKey] = Rect(effectiveBounds)
+                }
+                sessionRepository.recordWindowLaunched(
+                    packageName = recordPackageKey,
+                    activityName = intent.component?.className.orEmpty(),
+                    label = label,
+                    bounds = effectiveBounds,
+                    snapMode = snapMode,
+                    displayId = targetDisplayId
+                )
+            }
+            true
+        }.onFailure { err ->
+            Log.e(TAG, "Failed launching custom intent for $recordPackageKey", err)
+        }.getOrDefault(false)
+    }
+
+    fun launchOrFocusPackage(
+        packageName: String,
+        snapMode: WindowSnapMode? = null,
+        launchContext: Context? = null
+    ): Boolean {
+        val item = appRepository.findByPackage(packageName)
+        if (item != null) {
+            val effectiveSnap = snapMode
+                ?: sessionRepository.runningWindows.value
+                    .firstOrNull { it.packageName == packageName }
+                    ?.snapMode
+                ?: WindowSnapMode.FREEFORM_CASCADED
+            return launchApp(item, effectiveSnap, newInstance = false, launchContext = launchContext)
+        }
+
+        val fallbackIntent = appContext.packageManager.getLaunchIntentForPackage(packageName)
+            ?: return false
+        fallbackIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        val displayInfo = sessionRepository.activeDisplay.value
+        val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
+        val effectiveSnap = snapMode ?: WindowSnapMode.FREEFORM_CASCADED
+        val bounds = computeWindowBounds(packageName, displayInfo, effectiveSnap)
+        val bundle = buildFreeformActivityOptions(
+            targetDisplayId = targetDisplayId,
+            launchBounds = if (targetDisplayId != Display.DEFAULT_DISPLAY) bounds else null
+        )
+        return runCatching {
+            (launchContext ?: appContext).startActivity(fallbackIntent, bundle)
+            if (targetDisplayId != Display.DEFAULT_DISPLAY) {
+                sessionRepository.recordWindowLaunched(
+                    packageName = packageName,
+                    activityName = fallbackIntent.component?.className ?: "",
+                    label = packageName.substringAfterLast('.'),
+                    bounds = bounds,
+                    snapMode = effectiveSnap,
+                    displayId = targetDisplayId
+                )
+            }
+            true
+        }.getOrDefault(false)
+    }
+
+    /**
+     * Launches [packageName] into caller-specified exact [exactBounds] on the secondary display,
+     * used by [com.dexxp.desktop.layout.WorkspaceLayoutPresetManager] for custom Snap Groups
+     * (e.g., 70% / 30% Editing Suite or saved multi-window layouts).
+     */
+    fun launchPackageWithExactBounds(
+        packageName: String,
+        exactBounds: Rect,
+        snapMode: WindowSnapMode = WindowSnapMode.FREEFORM_CASCADED,
+        launchContext: Context? = null
+    ): Boolean {
+        val displayInfo = sessionRepository.activeDisplay.value
+        val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
+
+        val catalogItem = appRepository.findByPackage(packageName)
+        val launchIntent = if (catalogItem != null) {
+            Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                component = catalogItem.componentName
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+            }
+        } else {
+            appContext.packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            } ?: return false
+        }
+
+        val resolvedLabel = catalogItem?.label ?: packageName.substringAfterLast('.')
+        val resolvedActivity = catalogItem?.activityName ?: launchIntent.component?.className.orEmpty()
+        val safeBounds = Rect(exactBounds)
+
+        val optionsBundle = buildFreeformActivityOptions(
+            targetDisplayId = targetDisplayId,
+            launchBounds = if (targetDisplayId != Display.DEFAULT_DISPLAY) safeBounds else null
+        )
+
+        return runCatching {
+            (launchContext ?: appContext).startActivity(launchIntent, optionsBundle)
+            if (targetDisplayId != Display.DEFAULT_DISPLAY) {
+                rememberedBounds[packageName] = Rect(safeBounds)
+                sessionRepository.recordWindowLaunched(
+                    packageName = packageName,
+                    activityName = resolvedActivity,
+                    label = resolvedLabel,
+                    bounds = safeBounds,
+                    snapMode = snapMode,
+                    displayId = targetDisplayId
+                )
+            }
+            true
+        }.onFailure { err ->
+            Log.e(TAG, "Failed launching $packageName into preset bounds $safeBounds", err)
+        }.getOrDefault(false)
+    }
+
+    /**
+     * Stashes a single Freeform window to the Taskbar (`WindowTitlebarOverlayController` Minimize
+     * or Taskbar click on an already focused window).
+     */
+    fun toggleMinimizeWindow(packageName: String, launchContext: Context? = null) {
+        val record = sessionRepository.runningWindows.value.firstOrNull {
+            it.packageName == packageName
+        } ?: return
+
+        if (record.isMinimized) {
+            sessionRepository.setWindowMinimized(packageName, minimized = false)
+            launchOrFocusPackage(packageName, record.snapMode, launchContext)
+            return
+        }
+
+        sessionRepository.setWindowMinimized(packageName, minimized = true)
+        val remainingVisible = sessionRepository.runningWindows.value
+            .filterNot { it.isMinimized }
+            .sortedBy { it.lastActiveEpochMs }
+
+        sendSecondaryHomeToFront(launchContext)
+        for (win in remainingVisible) {
+            launchOrFocusPackage(win.packageName, win.snapMode, launchContext)
+        }
+    }
+
+    /**
+     * Toggles [packageName] between `MAXIMIZED` full work-area bounds and restored `FREEFORM_CASCADED` bounds.
+     */
+    fun toggleMaximizeOrRestoreWindow(packageName: String, launchContext: Context? = null): Boolean {
+        val current = sessionRepository.runningWindows.value.firstOrNull {
+            it.packageName == packageName
+        }
+        val nextSnap = if (current?.snapMode == WindowSnapMode.MAXIMIZED) {
+            WindowSnapMode.FREEFORM_CASCADED
+        } else {
+            WindowSnapMode.MAXIMIZED
+        }
+        return launchOrFocusPackage(packageName, nextSnap, launchContext)
+    }
+
+    /**
+     * Closes the target Freeform window by dispatching `GLOBAL_ACTION_BACK`, backgrounding
+     * behind `SecondaryDesktopActivity`, and terminating background task processes.
+     */
+    fun closeWindow(packageName: String, launchContext: Context? = null) {
+        DesktopPointerAccessibilityService.instance?.dispatchGlobalBackForClose()
+        sessionRepository.removeWindowRecord(packageName)
+
+        val remainingVisible = sessionRepository.runningWindows.value
+            .filterNot { it.isMinimized }
+            .sortedBy { it.lastActiveEpochMs }
+
+        if (remainingVisible.isEmpty()) {
+            sendSecondaryHomeToFront(launchContext)
+        } else {
+            for (win in remainingVisible) {
+                launchOrFocusPackage(win.packageName, win.snapMode, launchContext)
+            }
+        }
+
+        runCatching {
+            val am = appContext.getSystemService(ActivityManager::class.java)
+            am?.killBackgroundProcesses(packageName)
+        }
+    }
+
+    fun sendSecondaryHomeToFront(launchContext: Context? = null) {
+        val displayId = sessionRepository.activeDisplay.value?.displayId ?: return
+        if (displayId == Display.DEFAULT_DISPLAY) return
+        val homeIntent = Intent(appContext, SecondaryDesktopActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        val opts = ActivityOptions.makeBasic().apply {
+            setLaunchDisplayId(displayId)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                setPendingIntentBackgroundActivityStartMode(
+                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                )
+            }
+        }
+        runCatching { (launchContext ?: appContext).startActivity(homeIntent, opts.toBundle()) }
+    }
+
+    fun restoreWorkspaceWindows(windows: List<RunningWindowRecord>, launchContext: Context? = null) {
+        val orderedVisible = windows
+            .filterNot { it.isMinimized }
+            .sortedBy { it.lastActiveEpochMs }
+
+        sendSecondaryHomeToFront(launchContext)
+        for (win in orderedVisible) {
+            if (win.snapMode == WindowSnapMode.FREEFORM_CASCADED && !win.bounds.isEmpty) {
+                rememberedBounds[win.packageName] = Rect(win.bounds)
+            }
+            launchOrFocusPackage(win.packageName, win.snapMode, launchContext)
+        }
+    }
+
+    fun snapFocusedWindow(snapMode: WindowSnapMode, launchContext: Context? = null): Boolean {
+        val target = sessionRepository.focusedOrMostRecentWindow() ?: return false
+        return launchOrFocusPackage(target.packageName, snapMode, launchContext)
+    }
+
+    fun toggleMinimizeAllOrRestore(launchContext: Context? = null) {
+        val currentlyShowingDesktop = sessionRepository.isShowDesktopActive.value
+        val windows = sessionRepository.runningWindows.value
+        if (!currentlyShowingDesktop && windows.isNotEmpty()) {
+            sessionRepository.setShowDesktop(true)
+            sessionRepository.dismissFlyouts()
+            sendSecondaryHomeToFront(launchContext)
+        } else if (windows.isNotEmpty()) {
+            sessionRepository.setShowDesktop(false)
+            val top = sessionRepository.focusedOrMostRecentWindow(includeMinimized = true)
+            if (top != null) {
+                sessionRepository.setWindowMinimized(top.packageName, minimized = false)
+                launchOrFocusPackage(top.packageName, top.snapMode, launchContext)
+            }
+        } else {
+            sessionRepository.toggleShowDesktop()
+        }
+    }
+
+    fun launchAppDetailsSettings(packageName: String, launchContext: Context? = null) {
+        val displayInfo = sessionRepository.activeDisplay.value
+        val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.fromParts("package", packageName, null)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val bounds = computeWindowBounds("com.android.settings", displayInfo, WindowSnapMode.COMPACT_UTILITY)
+        val bundle = buildFreeformActivityOptions(
+            targetDisplayId = targetDisplayId,
+            launchBounds = if (targetDisplayId != Display.DEFAULT_DISPLAY) bounds else null
+        )
+        runCatching { (launchContext ?: appContext).startActivity(intent, bundle) }
+    }
+
+    fun launchContentUriInFreeform(uri: Uri, mimeType: String, launchContext: Context? = null): Boolean {
+        val displayInfo = sessionRepository.activeDisplay.value
+        val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
+        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mimeType.ifBlank { "*/*" })
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+        val bounds = computeWindowBounds("viewer.$mimeType", displayInfo, WindowSnapMode.FREEFORM_CASCADED)
+        val bundle = buildFreeformActivityOptions(
+            targetDisplayId = targetDisplayId,
+            launchBounds = if (targetDisplayId != Display.DEFAULT_DISPLAY) bounds else null
+        )
+        return runCatching {
+            (launchContext ?: appContext).startActivity(viewIntent, bundle)
+            if (targetDisplayId != Display.DEFAULT_DISPLAY) {
+                sessionRepository.setShowDesktop(false)
+            }
+            true
+        }.getOrDefault(false)
+    }
+
+    fun tileTopTwoWindowsSideBySide(launchContext: Context? = null) {
+        val active = sessionRepository.runningWindows.value
+            .filterNot { it.isMinimized }
+            .sortedByDescending { it.lastActiveEpochMs }
+            .take(2)
+        if (active.isEmpty()) return
+        launchOrFocusPackage(active[0].packageName, WindowSnapMode.LEFT_HALF, launchContext)
+        if (active.size > 1) {
+            launchOrFocusPackage(active[1].packageName, WindowSnapMode.RIGHT_HALF, launchContext)
+        }
+    }
+
+    fun computeWindowBounds(
+        packageName: String,
+        displayInfo: ExternalDisplayInfo?,
+        snapMode: WindowSnapMode
+    ): Rect {
+        val width = displayInfo?.widthPx ?: 1920
+        val height = displayInfo?.heightPx ?: 1080
+        val dpi = displayInfo?.scaledDensityDpi ?: 160
+
+        if (snapMode != WindowSnapMode.FREEFORM_CASCADED) {
+            return snappingController.computeSnapBounds(snapMode, width, height, dpi)
+        }
+
+        val density = dpi / 160f
+        val taskbarPx = (TASKBAR_HEIGHT_DP * density).roundToInt()
+        val marginPx = (WindowSnappingController.SNAP_MARGIN_DP * density).roundToInt()
+        val titlebarAllowancePx = (32 * density).roundToInt()
+        val usableHeight = (height - taskbarPx).coerceAtLeast(360)
+
+        rememberedBounds[packageName]?.let { saved ->
+            if (saved.width() in 320..width && saved.bottom <= usableHeight) {
+                return Rect(saved)
+            }
+        }
+
+        val winW = (width * 0.66f).roundToInt().coerceIn(640.coerceAtMost(width), width - marginPx * 2)
+        val winH = (usableHeight * 0.74f).roundToInt().coerceIn(420.coerceAtMost(usableHeight), usableHeight - titlebarAllowancePx - marginPx)
+
+        val step = cascadeCounter.getAndIncrement() % CASCADE_MODULO
+        val stepOffsetPx = (CASCADE_STEP_DP * density).roundToInt()
+        val baseLeft = ((width - winW) * 0.22f).roundToInt()
+        val baseTop = ((usableHeight - winH) * 0.18f).roundToInt().coerceAtLeast(titlebarAllowancePx)
+
+        val left = (baseLeft + step * stepOffsetPx).coerceIn(marginPx, (width - winW - marginPx).coerceAtLeast(marginPx))
+        val top = (baseTop + step * stepOffsetPx).coerceIn(titlebarAllowancePx, (usableHeight - winH - marginPx).coerceAtLeast(titlebarAllowancePx))
+        return Rect(left, top, left + winW, top + winH)
+    }
+
+    fun buildFreeformOptionsBundleForDisplay(
+        targetDisplayId: Int,
+        launchBounds: Rect? = null
+    ): Bundle = buildFreeformActivityOptions(targetDisplayId, launchBounds)
+
+    private fun buildFreeformActivityOptions(
+        targetDisplayId: Int,
+        launchBounds: Rect?
+    ): Bundle {
+        val options = ActivityOptions.makeBasic().apply {
+            setLaunchDisplayId(targetDisplayId)
+            if (launchBounds != null) {
+                setLaunchBounds(launchBounds)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                setPendingIntentBackgroundActivityStartMode(
+                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                )
+            }
+        }
+
+        if (launchBounds != null) {
+            runCatching {
+                setLaunchWindowingModeMethod?.invoke(options, WINDOWING_MODE_FREEFORM)
+            }
+        }
+
+        return options.toBundle().apply {
+            if (launchBounds != null) {
+                putInt(KEY_LAUNCH_WINDOWING_MODE, WINDOWING_MODE_FREEFORM)
+            }
+        }
+    }
+
+    companion object {
+        private const val TAG = "AppLauncher"
+        const val TASKBAR_HEIGHT_DP = 56
+        private const val CASCADE_STEP_DP = 32
+        private const val CASCADE_MODULO = 6
+        const val WINDOWING_MODE_FREEFORM = 5
+        private const val KEY_LAUNCH_WINDOWING_MODE = "android.activity.windowingMode"
+    }
+}
