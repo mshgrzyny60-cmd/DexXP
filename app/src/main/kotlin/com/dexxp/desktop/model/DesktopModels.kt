@@ -19,6 +19,23 @@ enum class DisplayTransportType(val label: String) {
 }
 
 /**
+ * Operating presentation paradigm: Desktop multi-window or TV fullscreen leanback.
+ */
+enum class DesktopEnvironmentMode(val label: String, val description: String) {
+    DESKTOP_FREEFORM("Desktop Mode", "Multi-window floating desktop with snapping & taskbar"),
+    TV_LEANBACK("TV Mode", "Fullscreen 10-foot media launcher without floating windows")
+}
+
+/**
+ * Performance & resolution throttle profiles preventing Wi-Fi bandwidth choking on 4K TVs.
+ */
+enum class DisplayPerformanceProfile(val label: String, val maxResolutionLabel: String) {
+    ULTRA_FAST_1080P("Ultra-Fast 1080p (60Hz)", "1920x1080 - Low Latency & High FPS"),
+    SMOOTH_720P("Max Smoothness 720p (60Hz)", "1280x720 - Minimal Bandwidth"),
+    NATIVE_MAX("Native High-Res (Up to 4K)", "Full Monitor Resolution")
+}
+
+/**
  * User-selectable desktop density scale factors applied atop the baseline monitor DPI.
  */
 enum class DesktopDpiScale(val multiplier: Float, val percentLabel: String) {

@@ -61,6 +61,7 @@ import com.dexxp.desktop.bridge.DesktopPointerAccessibilityService
 import com.dexxp.desktop.bridge.PointerFocusBridge
 import com.dexxp.desktop.launcher.AppLauncher
 import com.dexxp.desktop.launcher.AppRepository
+import com.dexxp.desktop.model.DesktopEnvironmentMode
 import com.dexxp.desktop.model.ExternalDisplayInfo
 import com.dexxp.desktop.model.ExternalWindowFrame
 import com.dexxp.desktop.model.RunningWindowRecord
@@ -295,7 +296,9 @@ class WindowTitlebarOverlayController(
         displayInfo: ExternalDisplayInfo?,
         barHeightPx: Int
     ): TitlebarRenderModel? {
-        if (showDesktop || flyoutOpen || displayInfo == null) return null
+        if (showDesktop || flyoutOpen || displayInfo == null ||
+            sessionRepository.environmentMode.value == DesktopEnvironmentMode.TV_LEANBACK
+        ) return null
 
         val visibleRecords = records.filterNot { it.isMinimized }
         val topRecord = visibleRecords.firstOrNull { it.isFocused }

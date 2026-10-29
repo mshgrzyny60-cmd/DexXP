@@ -4,7 +4,9 @@ import android.content.Context
 import android.graphics.Rect
 import android.net.Uri
 import com.dexxp.desktop.model.DesktopDpiScale
+import com.dexxp.desktop.model.DesktopEnvironmentMode
 import com.dexxp.desktop.model.DesktopNotificationItem
+import com.dexxp.desktop.model.DisplayPerformanceProfile
 import com.dexxp.desktop.model.ExternalDisplayInfo
 import com.dexxp.desktop.model.ExternalTextInputState
 import com.dexxp.desktop.model.RunningWindowRecord
@@ -42,6 +44,12 @@ class DesktopSessionRepository(context: Context) {
 
     private val _dpiScale = MutableStateFlow(loadSavedDpiScale())
     val dpiScale: StateFlow<DesktopDpiScale> = _dpiScale.asStateFlow()
+
+    private val _environmentMode = MutableStateFlow(loadSavedEnvironmentMode())
+    val environmentMode: StateFlow<DesktopEnvironmentMode> = _environmentMode.asStateFlow()
+
+    private val _performanceProfile = MutableStateFlow(loadSavedPerformanceProfile())
+    val performanceProfile: StateFlow<DisplayPerformanceProfile> = _performanceProfile.asStateFlow()
 
     private val _wallpaperPreset = MutableStateFlow(loadSavedWallpaper())
     val wallpaperPreset: StateFlow<WallpaperPreset> = _wallpaperPreset.asStateFlow()
@@ -509,6 +517,28 @@ class DesktopSessionRepository(context: Context) {
         }
     }
 
+    fun setEnvironmentMode(mode: DesktopEnvironmentMode) {
+        _environmentMode.value = mode
+        prefs.edit().putString(KEY_ENVIRONMENT_MODE, mode.name).apply()
+    }
+
+    fun setPerformanceProfile(profile: DisplayPerformanceProfile) {
+        _performanceProfile.value = profile
+        prefs.edit().putString(KEY_PERFORMANCE_PROFILE, profile.name).apply()
+    }
+
+    private fun loadSavedEnvironmentMode(): DesktopEnvironmentMode {
+        val raw = prefs.getString(KEY_ENVIRONMENT_MODE, DesktopEnvironmentMode.DESKTOP_FREEFORM.name)
+        return DesktopEnvironmentMode.entries.firstOrNull { it.name == raw }
+            ?: DesktopEnvironmentMode.DESKTOP_FREEFORM
+    }
+
+    private fun loadSavedPerformanceProfile(): DisplayPerformanceProfile {
+        val raw = prefs.getString(KEY_PERFORMANCE_PROFILE, DisplayPerformanceProfile.ULTRA_FAST_1080P.name)
+        return DisplayPerformanceProfile.entries.firstOrNull { it.name == raw }
+            ?: DisplayPerformanceProfile.ULTRA_FAST_1080P
+    }
+
     private fun loadSavedDpiScale(): DesktopDpiScale {
         val raw = prefs.getString(KEY_DPI_SCALE, DesktopDpiScale.SCALE_100.name)
         return DesktopDpiScale.entries.firstOrNull { it.name == raw } ?: DesktopDpiScale.SCALE_100
@@ -530,6 +560,8 @@ class DesktopSessionRepository(context: Context) {
 
     companion object {
         private const val PREFS_NAME = "dexxp_desktop_prefs"
+        private const val KEY_ENVIRONMENT_MODE = "environment_mode"
+        private const val KEY_PERFORMANCE_PROFILE = "performance_profile"
         private const val KEY_DPI_SCALE = "dpi_scale"
         private const val KEY_WALLPAPER = "wallpaper_preset"
         private const val KEY_PINNED_PACKAGES = "pinned_packages"

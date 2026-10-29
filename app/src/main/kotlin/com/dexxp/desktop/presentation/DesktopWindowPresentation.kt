@@ -39,6 +39,7 @@ import com.dexxp.desktop.keyboard.DesktopKeyboardManager
 import com.dexxp.desktop.launcher.AppLauncher
 import com.dexxp.desktop.launcher.AppRepository
 import com.dexxp.desktop.layout.WorkspaceLayoutPresetManager
+import com.dexxp.desktop.model.DisplayPerformanceProfile
 import com.dexxp.desktop.model.ShellSurfaceMode
 import com.dexxp.desktop.overview.MissionControlOverviewController
 import com.dexxp.desktop.power.PhoneScreenPowerController
@@ -270,9 +271,33 @@ class DesktopWindowPresentation(
 
     private fun selectOptimalDisplayMode(targetDisplay: Display): Display.Mode? = runCatching {
         if (!targetDisplay.isValid) return null
-        targetDisplay.supportedModes.maxWithOrNull(
-            compareBy<Display.Mode> { it.physicalWidth.toLong() * it.physicalHeight.toLong() }
-                .thenBy { it.refreshRate }
-        )
+        val modes = targetDisplay.supportedModes ?: return null
+        if (modes.isEmpty()) return null
+
+        val profile = sessionRepository.performanceProfile.value
+        val isWireless = (targetDisplay.flags and Display.FLAG_PRESENTATION) != 0 &&
+            (targetDisplay.name?.contains("wifi", ignoreCase = true) == true ||
+                targetDisplay.name?.contains("cast", ignoreCase = true) == true ||
+                targetDisplay.name?.contains("wireless", ignoreCase = true) == true)
+
+        when {
+            (isWireless && profile != DisplayPerformanceProfile.NATIVE_MAX) ||
+                profile == DisplayPerformanceProfile.ULTRA_FAST_1080P -> {
+                modes.filter { it.physicalWidth <= 1920 && it.physicalHeight <= 1080 }
+                    .maxWithOrNull(compareBy<Display.Mode> { it.physicalWidth.toLong() * it.physicalHeight.toLong() }.thenBy { it.refreshRate })
+                    ?: modes.minByOrNull { it.physicalWidth.toLong() * it.physicalHeight.toLong() }
+            }
+            profile == DisplayPerformanceProfile.SMOOTH_720P -> {
+                modes.filter { it.physicalWidth <= 1280 && it.physicalHeight <= 720 }
+                    .maxWithOrNull(compareBy<Display.Mode> { it.physicalWidth.toLong() * it.physicalHeight.toLong() }.thenBy { it.refreshRate })
+                    ?: modes.minByOrNull { it.physicalWidth.toLong() * it.physicalHeight.toLong() }
+            }
+            else -> {
+                modes.maxWithOrNull(
+                    compareBy<Display.Mode> { it.physicalWidth.toLong() * it.physicalHeight.toLong() }
+                        .thenBy { it.refreshRate }
+                )
+            }
+        }
     }.getOrNull()
 }

@@ -14,6 +14,7 @@ import android.view.Display
 import com.dexxp.desktop.SecondaryDesktopActivity
 import com.dexxp.desktop.bridge.DesktopPointerAccessibilityService
 import com.dexxp.desktop.model.DesktopAppItem
+import com.dexxp.desktop.model.DesktopEnvironmentMode
 import com.dexxp.desktop.model.ExternalDisplayInfo
 import com.dexxp.desktop.model.RunningWindowRecord
 import com.dexxp.desktop.model.WindowSnapMode
@@ -69,15 +70,24 @@ class AppLauncher(
             snapMode = snapMode
         )
 
-        val optionsBundle = buildFreeformActivityOptions(
-            targetDisplayId = targetDisplayId,
-            launchBounds = if (targetDisplayId != Display.DEFAULT_DISPLAY) bounds else null
-        )
+        val isTvMode = sessionRepository.environmentMode.value == DesktopEnvironmentMode.TV_LEANBACK
+        val optionsBundle = if (isTvMode) {
+            ActivityOptions.makeBasic().apply {
+                if (targetDisplayId != Display.DEFAULT_DISPLAY) {
+                    setLaunchDisplayId(targetDisplayId)
+                }
+            }.toBundle()
+        } else {
+            buildFreeformActivityOptions(
+                targetDisplayId = targetDisplayId,
+                launchBounds = if (targetDisplayId != Display.DEFAULT_DISPLAY) bounds else null
+            )
+        }
 
         val dispatcherContext = launchContext ?: appContext
         return runCatching {
             dispatcherContext.startActivity(intent, optionsBundle)
-            if (targetDisplayId != Display.DEFAULT_DISPLAY) {
+            if (targetDisplayId != Display.DEFAULT_DISPLAY && !isTvMode) {
                 if (snapMode == WindowSnapMode.FREEFORM_CASCADED) {
                     rememberedBounds[app.packageName] = Rect(bounds)
                 }

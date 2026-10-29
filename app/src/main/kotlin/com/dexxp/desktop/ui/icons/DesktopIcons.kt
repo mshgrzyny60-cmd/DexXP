@@ -752,4 +752,35 @@ object DesktopIcons {
             }
         }
     }
+
+    val Tv: ImageVector by lazy {
+        symbol("Tv") {
+            path(
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(3f, 7f); lineTo(21f, 7f); lineTo(21f, 18f); lineTo(3f, 18f); close()
+                moveTo(8.5f, 21f); lineTo(15.5f, 21f)
+                moveTo(12f, 18f); lineTo(12f, 21f)
+                moveTo(8.5f, 3.5f); lineTo(12f, 7f); lineTo(15.5f, 3.5f)
+            }
+        }
+    }
+
+    val Dpad: ImageVector by lazy {
+        symbol("Dpad") {
+            path(
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 1.8f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(9f, 3f); lineTo(15f, 3f); lineTo(15f, 9f); lineTo(21f, 9f)
+                lineTo(21f, 15f); lineTo(15f, 15f); lineTo(15f, 21f); lineTo(9f, 21f)
+                lineTo(9f, 15f); lineTo(3f, 15f); lineTo(3f, 9f); lineTo(9f, 9f); close()
+            }
+        }
+    }
 }

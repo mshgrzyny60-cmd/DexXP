@@ -1,6 +1,7 @@
 package com.dexxp.desktop.ui.phone
 
 import android.Manifest
+import android.accessibilityservice.AccessibilityService
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -8,6 +9,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
+import android.view.KeyEvent
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -62,8 +64,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -71,10 +75,12 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.dexxp.desktop.DexXpApplication
+import com.dexxp.desktop.bridge.DesktopPointerAccessibilityService
 import com.dexxp.desktop.bridge.PointerFocusBridge
 import com.dexxp.desktop.continuity.PhoneHubController
 import com.dexxp.desktop.input.VirtualTouchpadView
 import com.dexxp.desktop.keyboard.DesktopKeyboardManager
+import com.dexxp.desktop.model.DesktopEnvironmentMode
 import com.dexxp.desktop.model.ExternalDisplayInfo
 import com.dexxp.desktop.model.ExternalTextInputState
 import com.dexxp.desktop.model.SystemReadinessStatus
@@ -112,8 +118,10 @@ fun PhoneControllerScreen(
     val customDesktopUri by sessionRepository.customDesktopTreeUri.collectAsState()
     val isBlackoutActive by phoneScreenPowerController.isBlackoutActive.collectAsState()
     val externalMouseName by phoneScreenPowerController.externalMouseName.collectAsState()
+    val environmentMode by sessionRepository.environmentMode.collectAsState()
 
     var selectedTab by remember { mutableIntStateOf(0) }
+    var tvControllerSubTab by remember { mutableIntStateOf(0) }
 
     val safFolderPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -214,10 +222,24 @@ fun PhoneControllerScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         FilterChip(
+                            selected = environmentMode == DesktopEnvironmentMode.TV_LEANBACK,
+                            onClick = {
+                                val next = if (environmentMode == DesktopEnvironmentMode.TV_LEANBACK) {
+                                    DesktopEnvironmentMode.DESKTOP_FREEFORM
+                                } else {
+                                    DesktopEnvironmentMode.TV_LEANBACK
+                                }
+                                sessionRepository.setEnvironmentMode(next)
+                            },
+                            leadingIcon = { Icon(DesktopIcons.Tv, null, Modifier.size(16.dp)) },
+                            label = { Text(if (environmentMode == DesktopEnvironmentMode.TV_LEANBACK) "TV Mode (Active)" else "TV Mode") },
+                            shape = RoundedCornerShape(50)
+                        )
+                        FilterChip(
                             selected = selectedTab == 0,
                             onClick = { selectedTab = 0 },
                             leadingIcon = { Icon(DesktopIcons.Touchpad, null, Modifier.size(16.dp)) },
-                            label = { Text("Trackpad") },
+                            label = { Text("Controller") },
                             shape = RoundedCornerShape(50)
                         )
                         FilterChip(
@@ -272,50 +294,98 @@ fun PhoneControllerScreen(
             }
 
             if (selectedTab == 0) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(24.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                        .border(
-                            width = 1.dp,
-                            color = MaterialTheme.colorScheme.outlineVariant,
-                            shape = RoundedCornerShape(24.dp)
+                if (environmentMode == DesktopEnvironmentMode.TV_LEANBACK) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        FilterChip(
+                            selected = tvControllerSubTab == 0,
+                            onClick = { tvControllerSubTab = 0 },
+                            leadingIcon = { Icon(DesktopIcons.Dpad, null, Modifier.size(15.dp)) },
+                            label = { Text("TV Remote (D-Pad)") },
+                            shape = RoundedCornerShape(50)
                         )
-                ) {
-                    AndroidView(
-                        modifier = Modifier.fillMaxSize(),
-                        factory = { ctx ->
-                            VirtualTouchpadView(ctx).apply {
-                                this.pointerFocusBridge = pointerFocusBridge
-                                this.onThreeFingerSwipeUp = {
+                        Spacer(Modifier.width(10.dp))
+                        FilterChip(
+                            selected = tvControllerSubTab == 1,
+                            onClick = { tvControllerSubTab = 1 },
+                            leadingIcon = { Icon(DesktopIcons.Touchpad, null, Modifier.size(15.dp)) },
+                            label = { Text("Mouse Trackpad") },
+                            shape = RoundedCornerShape(50)
+                        )
+                    }
+                }
+
+                if (environmentMode == DesktopEnvironmentMode.TV_LEANBACK && tvControllerSubTab == 0) {
+                    PhoneTvRemoteDpad(
+                        pointerFocusBridge = pointerFocusBridge,
+                        onBack = {
+                            val handled = DesktopPointerAccessibilityService.instance?.performGlobalAction(
+                                AccessibilityService.GLOBAL_ACTION_BACK
+                            ) ?: false
+                            if (!handled) {
+                                pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_BACK)
+                            }
+                        },
+                        onHome = {
+                            val handled = DesktopPointerAccessibilityService.instance?.performGlobalAction(
+                                AccessibilityService.GLOBAL_ACTION_HOME
+                            ) ?: false
+                            if (!handled) {
+                                pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_HOME)
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                            .border(
+                                width = 1.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                                shape = RoundedCornerShape(24.dp)
+                            )
+                    ) {
+                        AndroidView(
+                            modifier = Modifier.fillMaxSize(),
+                            factory = { ctx ->
+                                VirtualTouchpadView(ctx).apply {
+                                    this.pointerFocusBridge = pointerFocusBridge
+                                    this.onThreeFingerSwipeUp = {
+                                        missionControlController.toggleOverview()
+                                    }
+                                    this.onThreeFingerSwipeDown = {
+                                        sessionRepository.toggleShowDesktop()
+                                    }
+                                }
+                            },
+                            update = { view ->
+                                view.pointerFocusBridge = pointerFocusBridge
+                                view.onThreeFingerSwipeUp = {
                                     missionControlController.toggleOverview()
                                 }
-                                this.onThreeFingerSwipeDown = {
+                                view.onThreeFingerSwipeDown = {
                                     sessionRepository.toggleShowDesktop()
                                 }
                             }
-                        },
-                        update = { view ->
-                            view.pointerFocusBridge = pointerFocusBridge
-                            view.onThreeFingerSwipeUp = {
-                                missionControlController.toggleOverview()
-                            }
-                            view.onThreeFingerSwipeDown = {
-                                sessionRepository.toggleShowDesktop()
-                            }
-                        }
-                    )
+                        )
 
-                    Text(
-                        text = "1F Move/Tap • Double-Tap Drag (Edge/Corner Snaps) • 2F Scroll/Right-Click • 3F Up: Mission Control",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 10.dp)
-                    )
+                        Text(
+                            text = "1F Move/Tap • Double-Tap Drag (Edge/Corner Snaps) • 2F Scroll/Right-Click • 3F Up: Mission Control",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 10.dp)
+                        )
+                    }
                 }
 
                 // Physical Mouse & Window Switcher Row
@@ -964,4 +1034,178 @@ private fun copyToClipboard(context: Context, script: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("DexXP ADB Setup", script))
     Toast.makeText(context, "ADB setup commands copied to clipboard", Toast.LENGTH_SHORT).show()
+}
+
+/**
+ * Clean 10-foot TV Remote Control D-Pad interface for controlling television navigation from the phone.
+ */
+@Composable
+private fun PhoneTvRemoteDpad(
+    pointerFocusBridge: PointerFocusBridge,
+    onBack: () -> Unit,
+    onHome: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val haptic = LocalHapticFeedback.current
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(24.dp))
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceEvenly
+    ) {
+        // Quick Action Bar: Back, Home, Volume Down, Volume Up
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            FilledTonalButton(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onBack()
+                },
+                shape = CircleShape,
+                modifier = Modifier.size(52.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Icon(DesktopIcons.Close, contentDescription = "Back", modifier = Modifier.size(20.dp))
+            }
+
+            FilledTonalButton(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onHome()
+                },
+                shape = CircleShape,
+                modifier = Modifier.size(52.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Icon(DesktopIcons.DesktopView, contentDescription = "Home", modifier = Modifier.size(20.dp))
+            }
+
+            FilledTonalButton(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_VOLUME_DOWN)
+                },
+                shape = CircleShape,
+                modifier = Modifier.size(52.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Icon(DesktopIcons.VolumeUp, contentDescription = "Vol -", modifier = Modifier.size(18.dp))
+            }
+
+            FilledTonalButton(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_VOLUME_UP)
+                },
+                shape = CircleShape,
+                modifier = Modifier.size(52.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Icon(DesktopIcons.VolumeUp, contentDescription = "Vol +", modifier = Modifier.size(22.dp))
+            }
+        }
+
+        // Circular D-Pad
+        Box(
+            modifier = Modifier
+                .size(240.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .border(2.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            // UP Button
+            IconButton(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_DPAD_UP)
+                },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 12.dp)
+                    .size(56.dp)
+            ) {
+                Icon(DesktopIcons.Maximize, contentDescription = "D-Pad Up", modifier = Modifier.size(28.dp))
+            }
+
+            // DOWN Button
+            IconButton(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_DPAD_DOWN)
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 12.dp)
+                    .size(56.dp)
+            ) {
+                Icon(DesktopIcons.Minimize, contentDescription = "D-Pad Down", modifier = Modifier.size(28.dp))
+            }
+
+            // LEFT Button
+            IconButton(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_DPAD_LEFT)
+                },
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 12.dp)
+                    .size(56.dp)
+            ) {
+                Icon(DesktopIcons.SplitLeft, contentDescription = "D-Pad Left", modifier = Modifier.size(28.dp))
+            }
+
+            // RIGHT Button
+            IconButton(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_DPAD_RIGHT)
+                },
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 12.dp)
+                    .size(56.dp)
+            ) {
+                Icon(DesktopIcons.SplitRight, contentDescription = "D-Pad Right", modifier = Modifier.size(28.dp))
+            }
+
+            // CENTER OK Button
+            Surface(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_DPAD_CENTER)
+                },
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary,
+                tonalElevation = 6.dp,
+                modifier = Modifier.size(80.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "OK",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
+            }
+        }
+
+        Text(
+            text = "D-Pad Remote • Controls TV Screen & Leanback Navigation",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+        )
+    }
 }

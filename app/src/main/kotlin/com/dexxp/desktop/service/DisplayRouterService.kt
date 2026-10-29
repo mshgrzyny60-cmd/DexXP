@@ -29,6 +29,8 @@ import com.dexxp.desktop.R
 import com.dexxp.desktop.SecondaryDesktopActivity
 import com.dexxp.desktop.bridge.CursorOverlayController
 import com.dexxp.desktop.model.DesktopDpiScale
+import com.dexxp.desktop.model.DesktopEnvironmentMode
+import com.dexxp.desktop.model.DisplayPerformanceProfile
 import com.dexxp.desktop.model.DisplayTransportType
 import com.dexxp.desktop.model.ExternalDisplayInfo
 import com.dexxp.desktop.presentation.DesktopWindowPresentation
@@ -215,8 +217,14 @@ class DisplayRouterService : Service() {
         teardownActivePresentation(keepPowerSession = true)
 
         val metrics = readRealDisplayMetrics(display)
-        val widthPx = metrics.widthPixels.coerceAtLeast(640)
-        val heightPx = metrics.heightPixels.coerceAtLeast(480)
+        val transport = classifyDisplayTransport(display)
+        val perfProfile = dexApp.sessionRepository.performanceProfile.value
+        val bestMode = selectOptimalDisplayMode(display, transport, perfProfile)
+
+        // On high-res TVs or wireless streams, using the selected performance mode dimensions
+        // drops GPU fill rate by up to 75% and avoids Wi-Fi encoder saturation.
+        val widthPx = (bestMode?.physicalWidth ?: metrics.widthPixels).coerceAtLeast(640)
+        val heightPx = (bestMode?.physicalHeight ?: metrics.heightPixels).coerceAtLeast(480)
         val scale: DesktopDpiScale = dexApp.sessionRepository.dpiScale.value
         val targetDpi = scale.computeTargetDpi(widthPx, heightPx)
 
@@ -230,12 +238,6 @@ class DisplayRouterService : Service() {
         }
         val scaledDisplayContext = baseDisplayContext.createConfigurationContext(overrideConfig)
 
-        val bestMode = runCatching {
-            display.supportedModes.maxWithOrNull(
-                compareBy<Display.Mode> { it.physicalWidth.toLong() * it.physicalHeight.toLong() }
-                    .thenBy { it.refreshRate }
-            )
-        }.getOrNull()
         val refreshHz = (bestMode?.refreshRate ?: display.refreshRate).roundToInt().coerceAtLeast(30)
         val isHdr = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -296,8 +298,10 @@ class DisplayRouterService : Service() {
             presentation.show()
             activePresentation = presentation
             attachedDisplayId = display.displayId
-            // Attach 28dp floating window titlebar first, then cursor HUD above it for top Z-order
-            titlebarOverlayController.attachToDisplay(display, scaledDisplayContext)
+            // Attach 28dp floating window titlebar in Freeform mode, then cursor HUD above it
+            if (dexApp.sessionRepository.environmentMode.value == DesktopEnvironmentMode.DESKTOP_FREEFORM) {
+                titlebarOverlayController.attachToDisplay(display, scaledDisplayContext)
+            }
             cursorOverlayController.attachToDisplay(display)
             promoteToForeground(
                 statusText = "${info.name} • ${info.resolutionSummary} (${targetDpi}dpi)"
@@ -423,6 +427,43 @@ class DisplayRouterService : Service() {
             .addAction(0, "Disconnect", stopEngineIntent)
             .build()
     }
+
+    private fun selectOptimalDisplayMode(
+        targetDisplay: Display,
+        transport: DisplayTransportType,
+        profile: DisplayPerformanceProfile
+    ): Display.Mode? = runCatching {
+        if (!targetDisplay.isValid) return null
+        val modes = targetDisplay.supportedModes ?: return null
+        if (modes.isEmpty()) return null
+
+        val isWireless = transport == DisplayTransportType.WIRELESS_MIRACAST
+
+        when {
+            // Wireless displays (Miracast/TV) automatically cap to 1080p 60Hz unless explicitly set to NATIVE_MAX
+            isWireless && profile != DisplayPerformanceProfile.NATIVE_MAX -> {
+                modes.filter { it.physicalWidth <= 1920 && it.physicalHeight <= 1080 }
+                    .maxWithOrNull(compareBy<Display.Mode> { it.physicalWidth.toLong() * it.physicalHeight.toLong() }.thenBy { it.refreshRate })
+                    ?: modes.minByOrNull { it.physicalWidth.toLong() * it.physicalHeight.toLong() }
+            }
+            profile == DisplayPerformanceProfile.ULTRA_FAST_1080P -> {
+                modes.filter { it.physicalWidth <= 1920 && it.physicalHeight <= 1080 }
+                    .maxWithOrNull(compareBy<Display.Mode> { it.physicalWidth.toLong() * it.physicalHeight.toLong() }.thenBy { it.refreshRate })
+                    ?: modes.minByOrNull { it.physicalWidth.toLong() * it.physicalHeight.toLong() }
+            }
+            profile == DisplayPerformanceProfile.SMOOTH_720P -> {
+                modes.filter { it.physicalWidth <= 1280 && it.physicalHeight <= 720 }
+                    .maxWithOrNull(compareBy<Display.Mode> { it.physicalWidth.toLong() * it.physicalHeight.toLong() }.thenBy { it.refreshRate })
+                    ?: modes.minByOrNull { it.physicalWidth.toLong() * it.physicalHeight.toLong() }
+            }
+            else -> {
+                modes.maxWithOrNull(
+                    compareBy<Display.Mode> { it.physicalWidth.toLong() * it.physicalHeight.toLong() }
+                        .thenBy { it.refreshRate }
+                )
+            }
+        }
+    }.getOrNull()
 
     companion object {
         private const val TAG = "DisplayRouterService"

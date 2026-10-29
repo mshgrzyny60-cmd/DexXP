@@ -85,6 +85,7 @@ import com.dexxp.desktop.layout.WorkspaceLayoutPresetManager
 import com.dexxp.desktop.model.CallPhase
 import com.dexxp.desktop.model.DesktopAppItem
 import com.dexxp.desktop.model.DesktopDpiScale
+import com.dexxp.desktop.model.DesktopEnvironmentMode
 import com.dexxp.desktop.model.DesktopFileItem
 import com.dexxp.desktop.model.DetectedOtpCode
 import com.dexxp.desktop.model.ExternalDisplayInfo
@@ -108,6 +109,7 @@ import com.dexxp.desktop.ui.icons.DesktopIcons
 import com.dexxp.desktop.ui.theme.StatusAmber
 import com.dexxp.desktop.ui.theme.StatusGreen
 import com.dexxp.desktop.windowing.SnapPreviewOverlay
+import com.dexxp.desktop.ui.tv.TvLeanbackWorkspaceRoot
 import com.dexxp.desktop.workspace.TaskbarWorkspaceChip
 import com.dexxp.desktop.workspace.VirtualWorkspaceManager
 import com.dexxp.desktop.workspace.WorkspaceSwitcherFlyout
@@ -148,6 +150,18 @@ fun DesktopWorkspaceRoot(
     renderInlineCursorFallback: Boolean,
     isBackdropOnly: Boolean = false
 ) {
+    val environmentMode by sessionRepository.environmentMode.collectAsState()
+
+    if (environmentMode == DesktopEnvironmentMode.TV_LEANBACK && !isBackdropOnly) {
+        TvLeanbackWorkspaceRoot(
+            sessionRepository = sessionRepository,
+            appRepository = appRepository,
+            appLauncher = appLauncher,
+            audioRouteManager = audioRouteManager
+        )
+        return
+    }
+
     val context = LocalContext.current
     val apps by appRepository.apps.collectAsState()
     val desktopFiles by desktopFileManager.files.collectAsState()

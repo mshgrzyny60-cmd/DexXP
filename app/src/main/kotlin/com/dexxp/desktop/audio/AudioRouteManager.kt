@@ -151,6 +151,14 @@ class AudioRouteManager(context: Context) {
         return strategyRouted || commRouted
     }
 
+    fun cycleNextOutputRoute() {
+        val list = _routes.value
+        if (list.isEmpty()) return
+        val currentIndex = list.indexOfFirst { it.isSelected }
+        val nextIndex = if (currentIndex >= 0) (currentIndex + 1) % list.size else 0
+        selectRoute(list[nextIndex])
+    }
+
     /**
      * Opens the native Android SystemUI Media Output Switcher panel for non-privileged
      * `STREAM_MUSIC` A2DP/Speaker switching on strict OEM builds.
