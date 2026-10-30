@@ -327,20 +327,24 @@ fun PhoneControllerScreen(
                         sessionRepository = sessionRepository,
                         pointerFocusBridge = pointerFocusBridge,
                         onBack = {
-                            val hasActiveApp = sessionRepository.runningWindows.value.any { !it.isMinimized }
-                            val handled = DesktopPointerAccessibilityService.instance?.performGlobalAction(
-                                AccessibilityService.GLOBAL_ACTION_BACK
-                            ) ?: false
-                            if (!handled) {
-                                pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_BACK)
-                            }
-                            if (!hasActiveApp) {
+                            val hasActiveApp = sessionRepository.runningWindows.value.any { !it.isMinimized } &&
+                                !sessionRepository.isShowDesktopActive.value
+                            if (hasActiveApp) {
+                                val handled = DesktopPointerAccessibilityService.instance?.performGlobalAction(
+                                    AccessibilityService.GLOBAL_ACTION_BACK
+                                ) ?: false
+                                if (!handled) {
+                                    pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_BACK)
+                                }
+                            } else {
                                 sessionRepository.sendTvNavigation(TvNavigationAction.BACK)
                             }
                         },
                         onHome = {
                             sessionRepository.setShowDesktop(true)
                             sessionRepository.minimizeAllWindows()
+                            val app = context.applicationContext as? DexXpApplication
+                            app?.appLauncher?.sendSecondaryHomeToFront(context)
                             val handled = DesktopPointerAccessibilityService.instance?.performGlobalAction(
                                 AccessibilityService.GLOBAL_ACTION_HOME
                             ) ?: false

@@ -149,7 +149,8 @@ class PointerFocusBridge(
         _detectedExternalFrames.value = frames
         sessionRepository.updateExternalWindowVisibility(
             hasVisibleExternalApp = bounds.isNotEmpty(),
-            focusedPackage = focusedPackage
+            focusedPackage = focusedPackage,
+            detectedPackages = frames.map { it.packageName }
         )
     }
 
@@ -192,12 +193,14 @@ class PointerFocusBridge(
         val taskbarHeightPx = (AppLauncher.TASKBAR_HEIGHT_DP * density).roundToInt()
 
         val isTvMode = sessionRepository.environmentMode.value == DesktopEnvironmentMode.TV_LEANBACK
+        val isLaunching = sessionRepository.launchingPackage.value != null
         val hasActiveApp = sessionRepository.runningWindows.value.any { !it.isMinimized } &&
-            !sessionRepository.isShowDesktopActive.value
+            !sessionRepository.isShowDesktopActive.value &&
+            !isLaunching
 
         val (targetWidth, targetHeight, targetGravity) = when {
             isTvMode && hasActiveApp -> {
-                // When an app is active on TV, hide presentation dialog so the app takes 100% of the screen
+                // When an app is active on TV (and not mid-launch), hide presentation dialog so the app takes 100% of the screen
                 Triple(0, 0, Gravity.TOP or Gravity.START)
             }
             mode == ShellSurfaceMode.DOCKED_TASKBAR -> {

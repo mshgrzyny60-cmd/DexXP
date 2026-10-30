@@ -176,15 +176,24 @@ class DesktopSessionRepository(context: Context) {
         states.any { it }
     }.stateIn(scope, SharingStarted.Eagerly, false)
 
+    private val _launchingPackage = MutableStateFlow<String?>(null)
+    val launchingPackage: StateFlow<String?> = _launchingPackage.asStateFlow()
+
+    fun setLaunchingPackage(packageName: String?) {
+        _launchingPackage.value = packageName
+    }
+
     val shellSurfaceMode: StateFlow<ShellSurfaceMode> = combine(
         anyFlyoutOpen,
         _isShowDesktopActive,
         _runningWindows,
-        _externalAppVisibleOnDisplay
-    ) { flyoutOpen, showDesktop, windows, externalVisible ->
+        _externalAppVisibleOnDisplay,
+        _launchingPackage
+    ) { flyoutOpen, showDesktop, windows, externalVisible, launching ->
         val hasUnminimizedWindows = windows.any { !it.isMinimized }
         when {
             flyoutOpen -> ShellSurfaceMode.FLYOUT_ACTIVE
+            launching != null -> ShellSurfaceMode.FULL_DESKTOP
             !showDesktop && (hasUnminimizedWindows || externalVisible) -> ShellSurfaceMode.DOCKED_TASKBAR
             else -> ShellSurfaceMode.FULL_DESKTOP
         }
@@ -409,6 +418,7 @@ class DesktopSessionRepository(context: Context) {
         }
         _isShowDesktopActive.value = true
         _externalAppVisibleOnDisplay.value = false
+        _launchingPackage.value = null
     }
 
     fun recordWindowLaunched(
@@ -473,6 +483,10 @@ class DesktopSessionRepository(context: Context) {
     }
 
     fun markWindowFocused(packageName: String?) {
+        if (_isShowDesktopActive.value) {
+            // NEVER auto-unminimize or steal focus from background apps when Desktop or TV home is active!
+            return
+        }
         _runningWindows.update { list ->
             list.map { item ->
                 val matches = item.packageName == packageName
@@ -499,10 +513,30 @@ class DesktopSessionRepository(context: Context) {
             ?: candidates.maxByOrNull { it.lastActiveEpochMs }
     }
 
-    fun updateExternalWindowVisibility(hasVisibleExternalApp: Boolean, focusedPackage: String?) {
+    fun updateExternalWindowVisibility(
+        hasVisibleExternalApp: Boolean,
+        focusedPackage: String?,
+        detectedPackages: List<String> = emptyList()
+    ) {
         _externalAppVisibleOnDisplay.value = hasVisibleExternalApp
-        if (focusedPackage != null && focusedPackage != appContext.packageName) {
-            markWindowFocused(focusedPackage)
+        val env = _environmentMode.value
+
+        if (!hasVisibleExternalApp) {
+            if (env == DesktopEnvironmentMode.TV_LEANBACK) {
+                // When an active TV app finishes or exits with Back, immediately return to TV home!
+                _isShowDesktopActive.value = true
+                _runningWindows.update { list ->
+                    list.map { it.copy(isMinimized = true, isFocused = false) }
+                }
+            }
+        } else {
+            val launching = _launchingPackage.value
+            if (launching != null && (focusedPackage == launching || detectedPackages.contains(launching))) {
+                _launchingPackage.value = null
+            }
+            if (!_isShowDesktopActive.value && focusedPackage != null && focusedPackage != appContext.packageName) {
+                markWindowFocused(focusedPackage)
+            }
         }
     }
 

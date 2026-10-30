@@ -184,10 +184,12 @@ class DesktopWindowPresentation(
                 sessionRepository.shellSurfaceMode,
                 sessionRepository.needsShellKeyboardFocus,
                 sessionRepository.environmentMode,
+                sessionRepository.launchingPackage,
                 keyboardManager.altTabState
-            ) { mode, needsKeyboard, envMode, altTab ->
+            ) { mode, needsKeyboard, envMode, launching, altTab ->
                 val isTv = envMode == DesktopEnvironmentMode.TV_LEANBACK
-                val hasActiveApp = mode == ShellSurfaceMode.DOCKED_TASKBAR
+                val isLaunching = launching != null
+                val hasActiveApp = mode == ShellSurfaceMode.DOCKED_TASKBAR && !isLaunching
                 val effectiveMode: ShellSurfaceMode = when {
                     altTab.isVisible -> ShellSurfaceMode.FLYOUT_ACTIVE
                     isTv && hasActiveApp -> ShellSurfaceMode.DOCKED_TASKBAR

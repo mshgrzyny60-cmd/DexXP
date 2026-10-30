@@ -22,6 +22,10 @@ import com.dexxp.desktop.model.RunningWindowRecord
 import com.dexxp.desktop.model.WindowSnapMode
 import com.dexxp.desktop.state.DesktopSessionRepository
 import com.dexxp.desktop.windowing.WindowSnappingController
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.lang.reflect.Method
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -54,12 +58,19 @@ class AppLauncher(
         newInstance: Boolean = false,
         launchContext: Context? = null
     ): Boolean {
+        val isTv = sessionRepository.environmentMode.value == DesktopEnvironmentMode.TV_LEANBACK
+        if (isTv) {
+            // Keep TV presentation visible with loading indicator during cold launch
+            sessionRepository.setLaunchingPackage(app.packageName)
+        }
+
         val displayInfo = sessionRepository.activeDisplay.value
         val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
 
         val baseIntent = appContext.packageManager.getLaunchIntentForPackage(app.packageName)
         val intent = if (baseIntent != null) {
             baseIntent.apply {
+                component = app.componentName
                 if (newInstance) {
                     addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
                 }
@@ -104,11 +115,23 @@ class AppLauncher(
             context = dispatcherContext,
             intent = intent,
             optionsBundle = optionsBundle,
-            targetDisplayId = targetDisplayId
+            targetDisplayId = targetDisplayId,
+            targetPackage = app.packageName
         )
 
         if (launched) {
             recordLaunch()
+            if (isTv) {
+                // Yield the TV presentation to the app after a smooth 750ms grace period
+                CoroutineScope(Dispatchers.Main.immediate).launch {
+                    delay(750)
+                    sessionRepository.setLaunchingPackage(null)
+                }
+            }
+        } else {
+            if (isTv) {
+                sessionRepository.setLaunchingPackage(null)
+            }
         }
         return launched
     }
@@ -134,7 +157,8 @@ class AppLauncher(
             context = dispatcher,
             intent = intent,
             optionsBundle = optionsBundle,
-            targetDisplayId = targetDisplayId
+            targetDisplayId = targetDisplayId,
+            targetPackage = recordPackageKey
         )
         if (launched) {
             if (snapMode == WindowSnapMode.FREEFORM_CASCADED) {
@@ -183,7 +207,8 @@ class AppLauncher(
             context = dispatcher,
             intent = fallbackIntent,
             optionsBundle = bundle,
-            targetDisplayId = targetDisplayId
+            targetDisplayId = targetDisplayId,
+            targetPackage = packageName
         )
         if (launched) {
             sessionRepository.recordWindowLaunched(
@@ -239,7 +264,8 @@ class AppLauncher(
             context = dispatcher,
             intent = launchIntent,
             optionsBundle = optionsBundle,
-            targetDisplayId = targetDisplayId
+            targetDisplayId = targetDisplayId,
+            targetPackage = packageName
         )
         if (launched) {
             rememberedBounds[packageName] = Rect(safeBounds)
@@ -340,7 +366,7 @@ class AppLauncher(
                     )
                 }
             }
-            dispatchActivityIntent(launchContext ?: appContext, homeIntent, opts.toBundle(), displayId)
+            dispatchActivityIntent(launchContext ?: appContext, homeIntent, opts.toBundle(), displayId, appContext.packageName)
         } else {
             val standaloneIntent = Intent(appContext, StandaloneDesktopActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
@@ -478,7 +504,8 @@ class AppLauncher(
         context: Context,
         intent: Intent,
         optionsBundle: Bundle,
-        targetDisplayId: Int
+        targetDisplayId: Int,
+        targetPackage: String? = null
     ): Boolean {
         // 1. Try launching through context directly
         val directSuccess = runCatching {
@@ -499,12 +526,13 @@ class AppLauncher(
         }
 
         // 3. Try launching through PendingIntent with MODE_BACKGROUND_ACTIVITY_START_ALLOWED (Android 14+ BAL compliant)
+        val requestCode = (targetPackage?.hashCode() ?: intent.filterHashCode()) and 0x7FFFFFFF
         val pendingSuccess = runCatching {
             val pi = PendingIntent.getActivity(
                 context,
-                (System.currentTimeMillis() and 0xFFFF).toInt(),
+                requestCode,
                 intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                 optionsBundle
             )
             pi.send(context, 0, null, null, null, null, optionsBundle)

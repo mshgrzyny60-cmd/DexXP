@@ -89,6 +89,7 @@ fun TvLeanbackWorkspaceRoot(
     val perfProfile by sessionRepository.performanceProfile.collectAsState()
     val audioRoutes by audioRouteManager.routes.collectAsState()
     val activeAudioRoute = audioRoutes.firstOrNull { it.isSelected }
+    val launchingPackage by sessionRepository.launchingPackage.collectAsState()
 
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -329,6 +330,7 @@ fun TvLeanbackWorkspaceRoot(
                     TvAppCard(
                         app = app,
                         isExternalFocused = (!isCategoryRailFocused && idx == focusedAppIndex),
+                        isLaunching = (app.packageName == launchingPackage),
                         onLaunch = {
                             isCategoryRailFocused = false
                             focusedAppIndex = idx
@@ -342,19 +344,20 @@ fun TvLeanbackWorkspaceRoot(
 }
 
 /**
- * Modern 10-foot TV App Card featuring luminous focus borders and spring scale animations
- * for couch/D-Pad navigation.
+ * Modern 10-foot TV App Card featuring luminous focus borders, spring scale animations,
+ * and Material 3 launching feedback for couch/D-Pad navigation.
  */
 @Composable
 private fun TvAppCard(
     app: DesktopAppItem,
     isExternalFocused: Boolean = false,
+    isLaunching: Boolean = false,
     onLaunch: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHovered by interactionSource.collectIsHoveredAsState()
-    val isHighlighted = isFocused || isHovered || isExternalFocused
+    val isHighlighted = isFocused || isHovered || isExternalFocused || isLaunching
 
     val scale by animateFloatAsState(
         targetValue = if (isHighlighted) 1.08f else 1.0f,
@@ -366,7 +369,9 @@ private fun TvAppCard(
         onClick = onLaunch,
         interactionSource = interactionSource,
         shape = RoundedCornerShape(20.dp),
-        color = if (isHighlighted) {
+        color = if (isLaunching) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+        } else if (isHighlighted) {
             MaterialTheme.colorScheme.surfaceContainerHigh
         } else {
             MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.75f)
@@ -389,7 +394,7 @@ private fun TvAppCard(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
+                .padding(14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
@@ -397,12 +402,12 @@ private fun TvAppCard(
                 Image(
                     bitmap = app.iconBitmap,
                     contentDescription = app.label,
-                    modifier = Modifier.size(64.dp)
+                    modifier = Modifier.size(56.dp)
                 )
             } else {
                 Box(
                     modifier = Modifier
-                        .size(64.dp)
+                        .size(56.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center
@@ -416,7 +421,7 @@ private fun TvAppCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             Text(
                 text = app.label,
@@ -427,10 +432,27 @@ private fun TvAppCard(
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 },
-                maxLines = 2,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center
             )
+
+            if (isLaunching) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.primary,
+                    tonalElevation = 2.dp
+                ) {
+                    Text(
+                        text = "Launching...",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+            }
         }
     }
 }

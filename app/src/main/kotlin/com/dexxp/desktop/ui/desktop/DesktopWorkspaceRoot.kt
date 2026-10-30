@@ -159,13 +159,28 @@ fun DesktopWorkspaceRoot(
 ) {
     val environmentMode by sessionRepository.environmentMode.collectAsState()
 
-    if (environmentMode == DesktopEnvironmentMode.TV_LEANBACK && !isBackdropOnly) {
-        TvLeanbackWorkspaceRoot(
-            sessionRepository = sessionRepository,
-            appRepository = appRepository,
-            appLauncher = appLauncher,
-            audioRouteManager = audioRouteManager
-        )
+    if (environmentMode == DesktopEnvironmentMode.TV_LEANBACK) {
+        if (!isBackdropOnly) {
+            TvLeanbackWorkspaceRoot(
+                sessionRepository = sessionRepository,
+                appRepository = appRepository,
+                appLauncher = appLauncher,
+                audioRouteManager = audioRouteManager
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color(0xFF0F141C),
+                                Color(0xFF080B10)
+                            )
+                        )
+                    )
+            )
+        }
         return
     }
 
