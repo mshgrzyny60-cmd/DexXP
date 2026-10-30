@@ -122,6 +122,15 @@
             </intent-filter>
         </activity>
 
+        <!-- Standalone Desktop Web Browser & WebApp Container (YouTube Desktop, WhatsApp Web, etc.) -->
+        <activity
+            android:name=".browser.DesktopWebActivity"
+            android:configChanges="density|fontScale|keyboard|keyboardHidden|layoutDirection|locale|mcc|mnc|navigation|orientation|screenLayout|screenSize|smallestScreenSize|touchscreen|uiMode"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:theme="@style/Theme.DexXP" />
+
         <!-- DisplayRouterService: Reacts to HDMI / USB-C DP Alt-Mode / Miracast -->
         <service
             android:name=".service.DisplayRouterService"

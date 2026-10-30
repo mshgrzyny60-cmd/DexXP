@@ -513,6 +513,7 @@ fun PhoneControllerScreen(
                 }
             } else {
                 SystemAndAdbSetupPane(
+                    activeDisplay = activeDisplay,
                     readiness = readiness,
                     customDesktopUri = customDesktopUri,
                     phoneHubController = phoneHubController,
@@ -731,6 +732,7 @@ private fun PhoneKeyboardRelayBar(
 
 @Composable
 private fun SystemAndAdbSetupPane(
+    activeDisplay: ExternalDisplayInfo?,
     readiness: SystemReadinessStatus,
     customDesktopUri: Uri?,
     phoneHubController: PhoneHubController,
@@ -992,8 +994,8 @@ private fun SystemAndAdbSetupPane(
         }
 
         // scrcpy PC Integration Card
-        val scrcpyUsbCommand = "scrcpy --new-display=1920x1080/280 --keyboard=uhid --mouse=uhid --stay-awake --window-title=\"DexXP - PC Desktop\""
-        val scrcpyWifiCommand = "scrcpy --tcpip=192.168.10.54:5555 --new-display=1920x1080/280 --keyboard=uhid --mouse=uhid --stay-awake --window-title=\"DexXP - PC Desktop\""
+        val scrcpyUsbCommand = "scrcpy --new-display=1920x1080/180 --keyboard=uhid --mouse=uhid --stay-awake --window-title=\"DexXP - PC Desktop\""
+        val scrcpyWifiCommand = "scrcpy --tcpip=192.168.10.54:5555 --new-display=1920x1080/180 --keyboard=uhid --mouse=uhid --stay-awake --window-title=\"DexXP - PC Desktop\""
 
         Surface(
             shape = RoundedCornerShape(20.dp),
@@ -1052,35 +1054,67 @@ private fun SystemAndAdbSetupPane(
                         Text("Copy Wi-Fi", style = MaterialTheme.typography.labelMedium)
                     }
                 }
+            }
+        }
 
-                Button(
-                    onClick = {
-                        val intent = Intent(context, StandaloneDesktopActivity::class.java).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                        }
-                        context.startActivity(intent)
-                    },
-                    shape = RoundedCornerShape(50),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(DesktopIcons.DesktopView, null, Modifier.size(16.dp))
+        // Desktop / Tablet Mode Enforcer (CapCut, Chrome & Large-Screen Layouts)
+        val targetDisplayId = activeDisplay?.displayId ?: 2
+        val densityCommand = "adb shell wm density 180 -d $targetDisplayId"
+        val densityResetCommand = "adb shell wm density reset -d $targetDisplayId"
+
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(20.dp))
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        DesktopIcons.Maximize,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
                     Spacer(Modifier.width(8.dp))
-                    Text("Launch Full Desktop Shell Now", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        text = "Force PC/Tablet UI (CapCut, Chrome & Apps)",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
                 }
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-                        .padding(12.dp)
+                Text(
+                    text = "Android defaults external displays to phone density (~320-440 DPI), making apps think they run on a phone and locking them to vertical mobile layouts. Running 'wm density 180' sets smallest width to 960dp, forcing CapCut, Chrome, and all apps into full PC/tablet multi-track and landscape layouts!",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = scrcpyUsbCommand,
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    Button(
+                        onClick = { copyToClipboard(context, densityCommand) },
+                        shape = RoundedCornerShape(50),
+                        modifier = Modifier.weight(1.3f)
+                    ) {
+                        Icon(DesktopIcons.Copy, null, Modifier.size(14.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Copy wm density 180", style = MaterialTheme.typography.labelMedium)
+                    }
+
+                    OutlinedButton(
+                        onClick = { copyToClipboard(context, densityResetCommand) },
+                        shape = RoundedCornerShape(50),
+                        modifier = Modifier.weight(0.9f)
+                    ) {
+                        Text("Reset Density", style = MaterialTheme.typography.labelMedium)
+                    }
                 }
             }
         }

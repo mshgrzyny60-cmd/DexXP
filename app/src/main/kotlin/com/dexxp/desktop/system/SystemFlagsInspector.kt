@@ -98,16 +98,19 @@ object SystemFlagsInspector {
         }
     }
 
-    fun buildAdbSetupCommands(packageName: String): String = buildString {
+    fun buildAdbSetupCommands(packageName: String, displayId: Int = 2): String = buildString {
         appendLine("# 1. Enable AOSP Freeform Window Management & Resizable Activities")
         appendLine("adb shell settings put global enable_freeform_support 1")
         appendLine("adb shell settings put global force_resizable_activities 1")
         appendLine("adb shell settings put global enable_non_resizable_multi_window 1")
         appendLine()
-        appendLine("# 2. Activate Secondary Display TaskDisplayArea Desktop Mode")
+        appendLine("# 2. Activate Secondary Display Desktop Mode")
         appendLine("adb shell settings put global force_desktop_mode_on_external_displays 1")
         appendLine()
-        appendLine("# 3. Grant Overlay, Accessibility Bridge & Notification Listener")
+        appendLine("# 3. Enforce Full Desktop/Tablet Layout in Apps (CapCut, Chrome, YouTube)")
+        appendLine("adb shell wm density 180 -d $displayId")
+        appendLine()
+        appendLine("# 4. Grant Overlay, Accessibility Bridge & Notification Listener")
         appendLine("adb shell appops set $packageName SYSTEM_ALERT_WINDOW allow")
         appendLine(
             "adb shell cmd notification allow_listener " +
@@ -119,7 +122,7 @@ object SystemFlagsInspector {
         )
         appendLine("adb shell settings put secure accessibility_enabled 1")
         appendLine()
-        appendLine("# 4. Apply WindowManagerService changes (reboot once)")
+        appendLine("# 5. Apply WindowManagerService changes (reboot once)")
         appendLine("adb reboot")
     }
 }

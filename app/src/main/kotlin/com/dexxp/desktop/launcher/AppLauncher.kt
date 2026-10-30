@@ -87,15 +87,12 @@ class AppLauncher(
             }
         }
 
-        val options = ActivityOptions.makeBasic().apply {
-            setLaunchDisplayId(targetDisplayId)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                setPendingIntentBackgroundActivityStartMode(
-                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
-                )
-            }
-        }
-        val optionsBundle = options.toBundle()
+        val bounds = Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+        val optionsBundle = buildLaunchActivityOptions(
+            targetDisplayId = targetDisplayId,
+            isTvMode = isTv,
+            launchBounds = bounds
+        )
 
         val dispatcherContext = launchContext ?: appContext
 
@@ -105,7 +102,7 @@ class AppLauncher(
                 packageName = app.packageName,
                 activityName = app.activityName,
                 label = app.label,
-                bounds = Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080),
+                bounds = bounds,
                 snapMode = WindowSnapMode.MAXIMIZED,
                 displayId = targetDisplayId
             )
@@ -582,7 +579,7 @@ class AppLauncher(
             }
         }
 
-        val targetWindowingMode = WINDOWING_MODE_FREEFORM
+        val targetWindowingMode = if (isTvMode) WINDOWING_MODE_FULLSCREEN else WINDOWING_MODE_FREEFORM
         if (launchBounds != null) {
             runCatching {
                 setLaunchWindowingModeMethod?.invoke(options, targetWindowingMode)

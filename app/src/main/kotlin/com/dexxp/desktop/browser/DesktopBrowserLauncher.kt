@@ -75,7 +75,7 @@ class DesktopBrowserLauncher(
             id = "youtube_desktop",
             title = "YouTube Desktop",
             subtitle = "Full Theater Studio",
-            desktopUrl = "https://www.youtube.com/?app=desktop&persist_app=1",
+            desktopUrl = "https://www.youtube.com",
             accentColorHex = 0xFFFF3D00
         ),
         DesktopWebAppDefinition(
@@ -88,7 +88,8 @@ class DesktopBrowserLauncher(
     )
 
     /**
-     * Launches a standalone borderless Freeform Desktop Web App instance on the secondary display.
+     * Launches a standalone borderless Freeform Desktop Web App instance on the secondary display
+     * using the dedicated Desktop Web Engine (guaranteed Desktop User-Agent, zero mobile redirects).
      */
     fun launchWebApp(
         webApp: DesktopWebAppDefinition,
@@ -96,17 +97,15 @@ class DesktopBrowserLauncher(
         launchContext: Context? = null
     ): Boolean {
         val displayInfo = sessionRepository.activeDisplay.value
-        val browserPkg = resolveInstalledDesktopBrowserPackage()
-        val intent = buildDesktopWebIntent(
-            url = webApp.desktopUrl,
-            appSessionId = "dexxp.webapp.${webApp.id}",
-            browserPackage = browserPkg,
-            borderlessWebAppMode = true
-        )
+        val intent = Intent(appContext, DesktopWebActivity::class.java).apply {
+            putExtra(DesktopWebActivity.EXTRA_URL, webApp.desktopUrl)
+            putExtra(DesktopWebActivity.EXTRA_TITLE, webApp.title)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+        }
         val bounds = computeDesktopViewportBounds(displayInfo, snapMode)
         return appLauncher.launchCustomIntentInFreeform(
             intent = intent,
-            recordPackageKey = browserPkg ?: "webapp.${webApp.id}",
+            recordPackageKey = "dexxp.webapp.${webApp.id}",
             label = webApp.title,
             customBounds = bounds,
             snapMode = snapMode,
@@ -159,8 +158,7 @@ class DesktopBrowserLauncher(
             }
             addCategory(Intent.CATEGORY_BROWSABLE)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
-                Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT
+                Intent.FLAG_ACTIVITY_MULTIPLE_TASK
 
             putExtra(Browser.EXTRA_APPLICATION_ID, appSessionId)
             putExtra(Browser.EXTRA_CREATE_NEW_TAB, true)
