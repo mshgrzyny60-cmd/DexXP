@@ -227,7 +227,7 @@ class DesktopWindowPresentation(
     override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
         if (ev.source and InputDevice.SOURCE_CLASS_POINTER != 0) {
             val isDown = (ev.buttonState and MotionEvent.BUTTON_PRIMARY) != 0
-            pointerFocusBridge.setPointerPosition(ev.x, ev.y, isDown)
+            pointerFocusBridge.setPointerPosition(ev.x, ev.y, isDown, sourceDisplayId = display.displayId)
         }
         return super.dispatchGenericMotionEvent(ev)
     }

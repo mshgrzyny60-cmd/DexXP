@@ -156,7 +156,7 @@ class StandaloneDesktopActivity : ComponentActivity() {
                 MotionEvent.ACTION_HOVER_MOVE,
                 MotionEvent.ACTION_HOVER_ENTER,
                 MotionEvent.ACTION_MOVE -> {
-                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = false)
+                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = false, sourceDisplayId = display?.displayId)
                 }
             }
         }
@@ -168,14 +168,14 @@ class StandaloneDesktopActivity : ComponentActivity() {
             val app = application as DexXpApplication
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = true)
+                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = true, sourceDisplayId = display?.displayId)
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = true)
+                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = true, sourceDisplayId = display?.displayId)
                 }
                 MotionEvent.ACTION_UP,
                 MotionEvent.ACTION_CANCEL -> {
-                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = false)
+                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = false, sourceDisplayId = display?.displayId)
                 }
             }
         }

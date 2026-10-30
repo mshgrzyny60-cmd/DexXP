@@ -1740,14 +1740,18 @@ private fun FreeformSetupNoticeBanner(
 
 /**
  * Leaf-isolated cursor canvas so 120Hz `pointerState` updates never recompose parent desktop trees.
+ *
+ * The state is read only inside the draw lambda, so pointer movement invalidates the draw
+ * phase alone (no recomposition / relayout). The sprite is hidden while a real hardware or
+ * scrcpy mouse is driving the pointer, because the system already draws its own arrow there.
  */
 @Composable
 private fun InlineDesktopCursorOverlay(pointerFocusBridge: PointerFocusBridge) {
-    val pointerState by pointerFocusBridge.pointerState.collectAsState()
-    if (!pointerState.visible) return
-
+    val pointerStateHolder = pointerFocusBridge.pointerState.collectAsState()
     val cursorPath = remember { Path() }
     Canvas(modifier = Modifier.fillMaxSize()) {
+        val pointerState = pointerStateHolder.value
+        if (!pointerState.visible || pointerState.isHardwarePointer) return@Canvas
         val x = pointerState.x
         val y = pointerState.y
         cursorPath.reset()

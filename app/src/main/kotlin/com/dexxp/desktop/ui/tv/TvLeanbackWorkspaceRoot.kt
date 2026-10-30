@@ -43,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,6 +66,7 @@ import com.dexxp.desktop.model.DisplayPerformanceProfile
 import com.dexxp.desktop.model.TvNavigationAction
 import com.dexxp.desktop.state.DesktopSessionRepository
 import com.dexxp.desktop.ui.icons.DesktopIcons
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -89,6 +91,7 @@ fun TvLeanbackWorkspaceRoot(
     val activeAudioRoute = audioRoutes.firstOrNull { it.isSelected }
 
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var focusedAppIndex by remember { mutableIntStateOf(0) }
     var isCategoryRailFocused by remember { mutableStateOf(false) }
     val gridState = rememberLazyGridState()
@@ -136,75 +139,89 @@ fun TvLeanbackWorkspaceRoot(
         }
     }
 
+    fun scrollToTarget(index: Int) {
+        coroutineScope.launch {
+            try {
+                gridState.animateScrollToItem(index)
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         sessionRepository.tvNavigationEvents.collect { action ->
-            val appCount = displayedApps.size
-            if (isCategoryRailFocused) {
-                when (action) {
-                    TvNavigationAction.LEFT -> {
-                        selectedCategoryIndex = (selectedCategoryIndex - 1).coerceAtLeast(0)
-                        focusedAppIndex = 0
-                        gridState.animateScrollToItem(0)
-                    }
-                    TvNavigationAction.RIGHT -> {
-                        selectedCategoryIndex = (selectedCategoryIndex + 1).coerceAtMost(categories.size - 1)
-                        focusedAppIndex = 0
-                        gridState.animateScrollToItem(0)
-                    }
-                    TvNavigationAction.DOWN -> {
-                        isCategoryRailFocused = false
-                        focusedAppIndex = 0
-                    }
-                    TvNavigationAction.SELECT -> {
-                        isCategoryRailFocused = false
-                        focusedAppIndex = 0
-                    }
-                    TvNavigationAction.UP, TvNavigationAction.BACK -> {
-                        // Keep focus in category rail
-                    }
-                }
-            } else {
-                if (appCount == 0) {
-                    isCategoryRailFocused = true
-                    return@collect
-                }
-                when (action) {
-                    TvNavigationAction.LEFT -> {
-                        if (focusedAppIndex > 0) {
-                            focusedAppIndex--
-                            gridState.animateScrollToItem(focusedAppIndex)
+            runCatching {
+                val appCount = displayedApps.size
+                if (isCategoryRailFocused) {
+                    when (action) {
+                        TvNavigationAction.LEFT -> {
+                            selectedCategoryIndex = (selectedCategoryIndex - 1).coerceAtLeast(0)
+                            focusedAppIndex = 0
+                            scrollToTarget(0)
+                        }
+                        TvNavigationAction.RIGHT -> {
+                            selectedCategoryIndex = (selectedCategoryIndex + 1).coerceAtMost(categories.size - 1)
+                            focusedAppIndex = 0
+                            scrollToTarget(0)
+                        }
+                        TvNavigationAction.DOWN -> {
+                            isCategoryRailFocused = false
+                            focusedAppIndex = 0
+                            scrollToTarget(0)
+                        }
+                        TvNavigationAction.SELECT -> {
+                            isCategoryRailFocused = false
+                            focusedAppIndex = 0
+                            scrollToTarget(0)
+                        }
+                        TvNavigationAction.UP, TvNavigationAction.BACK -> {
+                            // Stay on category rail
                         }
                     }
-                    TvNavigationAction.RIGHT -> {
-                        if (focusedAppIndex < appCount - 1) {
-                            focusedAppIndex++
-                            gridState.animateScrollToItem(focusedAppIndex)
-                        }
-                    }
-                    TvNavigationAction.UP -> {
-                        if (focusedAppIndex < numColumns) {
-                            isCategoryRailFocused = true
-                        } else {
-                            focusedAppIndex = (focusedAppIndex - numColumns).coerceAtLeast(0)
-                            gridState.animateScrollToItem(focusedAppIndex)
-                        }
-                    }
-                    TvNavigationAction.DOWN -> {
-                        if (focusedAppIndex + numColumns < appCount) {
-                            focusedAppIndex += numColumns
-                            gridState.animateScrollToItem(focusedAppIndex)
-                        } else if (focusedAppIndex < appCount - 1) {
-                            focusedAppIndex = appCount - 1
-                            gridState.animateScrollToItem(focusedAppIndex)
-                        }
-                    }
-                    TvNavigationAction.SELECT -> {
-                        if (focusedAppIndex in displayedApps.indices) {
-                            appLauncher.launchApp(displayedApps[focusedAppIndex], launchContext = context)
-                        }
-                    }
-                    TvNavigationAction.BACK -> {
+                } else {
+                    if (appCount == 0) {
                         isCategoryRailFocused = true
+                        return@runCatching
+                    }
+                    when (action) {
+                        TvNavigationAction.LEFT -> {
+                            if (focusedAppIndex > 0) {
+                                focusedAppIndex--
+                                scrollToTarget(focusedAppIndex)
+                            }
+                        }
+                        TvNavigationAction.RIGHT -> {
+                            if (focusedAppIndex < appCount - 1) {
+                                focusedAppIndex++
+                                scrollToTarget(focusedAppIndex)
+                            }
+                        }
+                        TvNavigationAction.UP -> {
+                            if (focusedAppIndex < numColumns) {
+                                isCategoryRailFocused = true
+                            } else {
+                                focusedAppIndex = (focusedAppIndex - numColumns).coerceAtLeast(0)
+                                scrollToTarget(focusedAppIndex)
+                            }
+                        }
+                        TvNavigationAction.DOWN -> {
+                            if (focusedAppIndex + numColumns < appCount) {
+                                focusedAppIndex += numColumns
+                                scrollToTarget(focusedAppIndex)
+                            } else if (focusedAppIndex < appCount - 1) {
+                                focusedAppIndex = appCount - 1
+                                scrollToTarget(focusedAppIndex)
+                            }
+                        }
+                        TvNavigationAction.SELECT -> {
+                            if (focusedAppIndex in displayedApps.indices) {
+                                val target = displayedApps[focusedAppIndex]
+                                appLauncher.launchApp(target, launchContext = context)
+                            }
+                        }
+                        TvNavigationAction.BACK -> {
+                            isCategoryRailFocused = true
+                        }
                     }
                 }
             }
@@ -430,9 +447,15 @@ private fun TvTopHeaderBar(
     onCyclePerfProfile: () -> Unit,
     onCycleAudioRoute: () -> Unit
 ) {
-    val currentTime = remember {
-        val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
-        sdf.format(Date())
+    val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    var currentTime by remember { mutableStateOf(timeFormat.format(Date())) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            val nowMs = System.currentTimeMillis()
+            currentTime = timeFormat.format(Date(nowMs))
+            val sleepMs = (60_000L - (nowMs % 60_000L)).coerceIn(500L, 60_000L)
+            kotlinx.coroutines.delay(sleepMs)
+        }
     }
 
     Row(

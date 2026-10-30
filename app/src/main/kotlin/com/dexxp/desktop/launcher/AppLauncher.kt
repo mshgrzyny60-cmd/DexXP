@@ -2,6 +2,7 @@ package com.dexxp.desktop.launcher
 
 import android.app.ActivityManager
 import android.app.ActivityOptions
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.graphics.Rect
@@ -72,29 +73,32 @@ class AppLauncher(
         val intent = if (baseIntent != null) {
             baseIntent.apply {
                 if (newInstance) {
-                    addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT)
+                    addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
                 }
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT)
+                putExtra("miui.floating_window", !isTvMode)
+                putExtra("android.activity.windowingMode", if (isTvMode) WINDOWING_MODE_FULLSCREEN else WINDOWING_MODE_FREEFORM)
             }
         } else {
             Intent(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_LAUNCHER)
                 component = app.componentName
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT
                 if (newInstance) {
-                    addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT)
+                    addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
                 }
+                putExtra("miui.floating_window", !isTvMode)
+                putExtra("android.activity.windowingMode", if (isTvMode) WINDOWING_MODE_FULLSCREEN else WINDOWING_MODE_FREEFORM)
             }
         }
 
         val optionsBundle = buildLaunchActivityOptions(
             targetDisplayId = targetDisplayId,
             isTvMode = isTvMode,
-            launchBounds = if (!isTvMode) bounds else null
+            launchBounds = bounds
         )
 
         val dispatcherContext = launchContext ?: appContext
-        val a11y = DesktopPointerAccessibilityService.instance
 
         fun recordLaunch() {
             if (isTvMode) {
@@ -121,39 +125,17 @@ class AppLauncher(
             }
         }
 
-        return runCatching {
-            dispatcherContext.startActivity(intent, optionsBundle)
+        val launched = dispatchActivityIntent(
+            context = dispatcherContext,
+            intent = intent,
+            optionsBundle = optionsBundle,
+            targetDisplayId = targetDisplayId
+        )
+
+        if (launched) {
             recordLaunch()
-            true
-        }.recoverCatching { err ->
-            Log.w(TAG, "dispatcherContext.startActivity failed, trying AccessibilityService...", err)
-            if (a11y != null) {
-                a11y.startActivity(intent, optionsBundle)
-                recordLaunch()
-                true
-            } else {
-                throw err
-            }
-        }.recoverCatching { err ->
-            Log.w(TAG, "Options launch failed, retrying with basic display options...", err)
-            val basicOptions = ActivityOptions.makeBasic().apply {
-                setLaunchDisplayId(targetDisplayId)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    setPendingIntentBackgroundActivityStartMode(
-                        ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
-                    )
-                }
-            }.toBundle()
-            dispatcherContext.startActivity(intent, basicOptions)
-            recordLaunch()
-            true
-        }.recoverCatching { err ->
-            Log.w(TAG, "Display launch failed, retrying standard launch...", err)
-            dispatcherContext.startActivity(intent)
-            true
-        }.onFailure { err ->
-            Log.e(TAG, "Failed launching ${app.uniqueKey} on display $targetDisplayId", err)
-        }.getOrDefault(false)
+        }
+        return launched
     }
 
     fun launchCustomIntentInFreeform(
@@ -172,8 +154,14 @@ class AppLauncher(
             launchBounds = effectiveBounds
         )
 
-        return runCatching {
-            (launchContext ?: appContext).startActivity(intent, optionsBundle)
+        val dispatcher = launchContext ?: appContext
+        val launched = dispatchActivityIntent(
+            context = dispatcher,
+            intent = intent,
+            optionsBundle = optionsBundle,
+            targetDisplayId = targetDisplayId
+        )
+        if (launched) {
             if (snapMode == WindowSnapMode.FREEFORM_CASCADED) {
                 rememberedBounds[recordPackageKey] = Rect(effectiveBounds)
             }
@@ -185,10 +173,8 @@ class AppLauncher(
                 snapMode = snapMode,
                 displayId = targetDisplayId
             )
-            true
-        }.onFailure { err ->
-            Log.e(TAG, "Failed launching custom intent for $recordPackageKey", err)
-        }.getOrDefault(false)
+        }
+        return launched
     }
 
     fun launchOrFocusPackage(
@@ -217,8 +203,14 @@ class AppLauncher(
             targetDisplayId = targetDisplayId,
             launchBounds = bounds
         )
-        return runCatching {
-            (launchContext ?: appContext).startActivity(fallbackIntent, bundle)
+        val dispatcher = launchContext ?: appContext
+        val launched = dispatchActivityIntent(
+            context = dispatcher,
+            intent = fallbackIntent,
+            optionsBundle = bundle,
+            targetDisplayId = targetDisplayId
+        )
+        if (launched) {
             sessionRepository.recordWindowLaunched(
                 packageName = packageName,
                 activityName = fallbackIntent.component?.className ?: "",
@@ -227,8 +219,8 @@ class AppLauncher(
                 snapMode = effectiveSnap,
                 displayId = targetDisplayId
             )
-            true
-        }.getOrDefault(false)
+        }
+        return launched
     }
 
     /**
@@ -267,8 +259,14 @@ class AppLauncher(
             launchBounds = safeBounds
         )
 
-        return runCatching {
-            (launchContext ?: appContext).startActivity(launchIntent, optionsBundle)
+        val dispatcher = launchContext ?: appContext
+        val launched = dispatchActivityIntent(
+            context = dispatcher,
+            intent = launchIntent,
+            optionsBundle = optionsBundle,
+            targetDisplayId = targetDisplayId
+        )
+        if (launched) {
             rememberedBounds[packageName] = Rect(safeBounds)
             sessionRepository.recordWindowLaunched(
                 packageName = packageName,
@@ -278,10 +276,8 @@ class AppLauncher(
                 snapMode = snapMode,
                 displayId = targetDisplayId
             )
-            true
-        }.onFailure { err ->
-            Log.e(TAG, "Failed launching $packageName into preset bounds $safeBounds", err)
-        }.getOrDefault(false)
+        }
+        return launched
     }
 
     /**
@@ -491,6 +487,64 @@ class AppLauncher(
         val left = (baseLeft + step * stepOffsetPx).coerceIn(marginPx, (width - winW - marginPx).coerceAtLeast(marginPx))
         val top = (baseTop + step * stepOffsetPx).coerceIn(titlebarAllowancePx, (usableHeight - winH - marginPx).coerceAtLeast(titlebarAllowancePx))
         return Rect(left, top, left + winW, top + winH)
+    }
+
+    fun dispatchActivityIntent(
+        context: Context,
+        intent: Intent,
+        optionsBundle: Bundle,
+        targetDisplayId: Int
+    ): Boolean {
+        // 1. Try launching through context directly
+        val directSuccess = runCatching {
+            context.startActivity(intent, optionsBundle)
+            true
+        }.getOrDefault(false)
+
+        if (directSuccess) return true
+
+        // 2. Try launching through DesktopPointerAccessibilityService (privileged background launcher)
+        val a11y = DesktopPointerAccessibilityService.instance
+        if (a11y != null) {
+            val a11ySuccess = runCatching {
+                a11y.startActivity(intent, optionsBundle)
+                true
+            }.getOrDefault(false)
+            if (a11ySuccess) return true
+        }
+
+        // 3. Try launching through PendingIntent with MODE_BACKGROUND_ACTIVITY_START_ALLOWED (Android 14+ BAL compliant)
+        val pendingSuccess = runCatching {
+            val pi = PendingIntent.getActivity(
+                context,
+                (System.currentTimeMillis() and 0xFFFF).toInt(),
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                optionsBundle
+            )
+            pi.send(context, 0, null, null, null, null, optionsBundle)
+            true
+        }.getOrDefault(false)
+
+        if (pendingSuccess) return true
+
+        // 4. Fallback to basic display options without bounds
+        val basicOptions = ActivityOptions.makeBasic().apply {
+            setLaunchDisplayId(targetDisplayId)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                setPendingIntentBackgroundActivityStartMode(
+                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                )
+            }
+        }.toBundle()
+
+        return runCatching {
+            context.startActivity(intent, basicOptions)
+            true
+        }.recoverCatching {
+            context.startActivity(intent)
+            true
+        }.getOrDefault(false)
     }
 
     fun buildFreeformOptionsBundleForDisplay(

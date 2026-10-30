@@ -40,7 +40,9 @@ import com.dexxp.desktop.command.CommandPaletteController
 import com.dexxp.desktop.launcher.AppLauncher
 import com.dexxp.desktop.launcher.AppRepository
 import com.dexxp.desktop.model.AltTabOverlayState
+import com.dexxp.desktop.model.DesktopEnvironmentMode
 import com.dexxp.desktop.model.RunningWindowRecord
+import com.dexxp.desktop.model.TvNavigationAction
 import com.dexxp.desktop.model.WindowSnapMode
 import com.dexxp.desktop.overview.MissionControlOverviewController
 import com.dexxp.desktop.state.DesktopSessionRepository
@@ -127,6 +129,38 @@ class DesktopKeyboardManager(
                 dismissAltTab()
                 terminalLauncher.toggleTerminal()
                 return true
+            }
+        }
+
+        // 1. In TV Leanback Mode, route physical remote & arrow keys to Leanback Navigation
+        if (sessionRepository.environmentMode.value == DesktopEnvironmentMode.TV_LEANBACK && !event.isMetaPressed) {
+            if (action == KeyEvent.ACTION_DOWN) {
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        sessionRepository.sendTvNavigation(TvNavigationAction.UP)
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        sessionRepository.sendTvNavigation(TvNavigationAction.DOWN)
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        sessionRepository.sendTvNavigation(TvNavigationAction.LEFT)
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        sessionRepository.sendTvNavigation(TvNavigationAction.RIGHT)
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                        sessionRepository.sendTvNavigation(TvNavigationAction.SELECT)
+                        return true
+                    }
+                    KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
+                        sessionRepository.sendTvNavigation(TvNavigationAction.BACK)
+                        return true
+                    }
+                }
             }
         }
 

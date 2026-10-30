@@ -254,18 +254,42 @@ class PointerFocusBridge(
         }
     }
 
-    fun setPointerPosition(screenX: Float, screenY: Float, isDown: Boolean = false) {
+    /**
+     * Syncs the shared pointer position with a real hardware / scrcpy mouse event.
+     *
+     * Events originating from a different display than the active desktop display are ignored,
+     * so phone-screen mouse movement can never teleport (or pin to a corner) the desktop pointer.
+     */
+    fun setPointerPosition(
+        screenX: Float,
+        screenY: Float,
+        isDown: Boolean = false,
+        sourceDisplayId: Int? = null
+    ) {
+        if (sourceDisplayId != null) {
+            val activeId = sessionRepository.activeDisplay.value?.displayId
+            if (activeId != null && activeId != sourceDisplayId) return
+        }
         val now = SystemClock.uptimeMillis()
         _pointerState.update { current ->
             val maxX = (current.displayWidth - 1).coerceAtLeast(1).toFloat()
             val maxY = (current.displayHeight - 1).coerceAtLeast(1).toFloat()
-            current.copy(
-                x = screenX.coerceIn(0f, maxX),
-                y = screenY.coerceIn(0f, maxY),
-                visible = true,
-                isPrimaryDown = isDown,
-                lastInteractionMs = now
-            )
+            val nx = screenX.coerceIn(0f, maxX)
+            val ny = screenY.coerceIn(0f, maxY)
+            if (nx == current.x && ny == current.y && current.isPrimaryDown == isDown &&
+                current.visible && current.isHardwarePointer
+            ) {
+                current
+            } else {
+                current.copy(
+                    x = nx,
+                    y = ny,
+                    visible = true,
+                    isPrimaryDown = isDown,
+                    lastInteractionMs = now,
+                    isHardwarePointer = true
+                )
+            }
         }
     }
 
@@ -280,7 +304,9 @@ class PointerFocusBridge(
             val maxY = (current.displayHeight - 1).coerceAtLeast(1).toFloat()
             val clampedX = (current.x + deltaX * sensitivity).coerceIn(0f, maxX)
             val clampedY = (current.y + deltaY * sensitivity).coerceIn(0f, maxY)
-            if (clampedX == current.x && clampedY == current.y && current.visible && !current.isDragging) {
+            if (clampedX == current.x && clampedY == current.y && current.visible &&
+                !current.isDragging && !current.isHardwarePointer
+            ) {
                 nextState = null
                 current
             } else {
@@ -288,7 +314,8 @@ class PointerFocusBridge(
                     x = clampedX,
                     y = clampedY,
                     visible = true,
-                    lastInteractionMs = now
+                    lastInteractionMs = now,
+                    isHardwarePointer = false
                 )
                 nextState = updated
                 updated
@@ -345,7 +372,9 @@ class PointerFocusBridge(
     fun performPrimaryClick() {
         val state = _pointerState.value
         val now = SystemClock.uptimeMillis()
-        _pointerState.update { it.copy(visible = true, isPrimaryDown = true, lastInteractionMs = now) }
+        _pointerState.update {
+            it.copy(visible = true, isPrimaryDown = true, lastInteractionMs = now, isHardwarePointer = false)
+        }
 
         val titlebarHit = resolveTitlebarOverlayAt(state.x, state.y, reusableTitlebarBounds)
         if (titlebarHit != null) {
@@ -393,7 +422,9 @@ class PointerFocusBridge(
     fun performSecondaryClick() {
         val state = _pointerState.value
         val now = SystemClock.uptimeMillis()
-        _pointerState.update { it.copy(visible = true, isSecondaryDown = true, lastInteractionMs = now) }
+        _pointerState.update {
+            it.copy(visible = true, isSecondaryDown = true, lastInteractionMs = now, isHardwarePointer = false)
+        }
 
         val shellTarget = resolveShellTargetAt(state.x, state.y)
         if (shellTarget != null) {
@@ -430,7 +461,8 @@ class PointerFocusBridge(
                 isPrimaryDown = true,
                 isDragging = true,
                 visible = true,
-                lastInteractionMs = now
+                lastInteractionMs = now,
+                isHardwarePointer = false
             )
         }
 

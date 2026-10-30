@@ -335,7 +335,24 @@ class DisplayRouterService : Service() {
                 )
             }
         }
-        runCatching { startActivity(intent, options.toBundle()) }
+        val bundle = options.toBundle()
+        val directStarted = runCatching {
+            startActivity(intent, bundle)
+            true
+        }.getOrDefault(false)
+
+        if (!directStarted) {
+            runCatching {
+                val pi = PendingIntent.getActivity(
+                    this,
+                    2001,
+                    intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    bundle
+                )
+                pi.send(this, 0, null, null, null, null, bundle)
+            }
+        }
     }
 
     private fun teardownActivePresentation(keepPowerSession: Boolean = false) {

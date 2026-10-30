@@ -103,7 +103,7 @@ class MainActivity : ComponentActivity() {
                 MotionEvent.ACTION_HOVER_MOVE,
                 MotionEvent.ACTION_HOVER_ENTER,
                 MotionEvent.ACTION_MOVE -> {
-                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = false)
+                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = false, sourceDisplayId = display?.displayId)
                 }
             }
         }
@@ -116,11 +116,11 @@ class MainActivity : ComponentActivity() {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN,
                 MotionEvent.ACTION_MOVE -> {
-                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = true)
+                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = true, sourceDisplayId = display?.displayId)
                 }
                 MotionEvent.ACTION_UP,
                 MotionEvent.ACTION_CANCEL -> {
-                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = false)
+                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = false, sourceDisplayId = display?.displayId)
                 }
             }
         }

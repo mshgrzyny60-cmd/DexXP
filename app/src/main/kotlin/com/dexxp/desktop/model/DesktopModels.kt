@@ -191,7 +191,12 @@ data class PointerState(
     val isSecondaryDown: Boolean = false,
     val isDragging: Boolean = false,
     val visible: Boolean = false,
-    val lastInteractionMs: Long = 0L
+    val lastInteractionMs: Long = 0L,
+    /**
+     * `true` when the last movement came from a real hardware/scrcpy mouse that already has a
+     * system-drawn pointer, so the virtual (trackpad) cursor sprite must stay hidden.
+     */
+    val isHardwarePointer: Boolean = false
 )
 
 /**
