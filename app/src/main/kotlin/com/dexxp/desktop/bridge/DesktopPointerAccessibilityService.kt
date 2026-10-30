@@ -13,6 +13,13 @@ import android.view.accessibility.AccessibilityWindowInfo
 import com.dexxp.desktop.DexXpApplication
 import com.dexxp.desktop.model.ExternalTextInputState
 import com.dexxp.desktop.model.ExternalWindowFrame
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.hypot
 
 /**
@@ -27,6 +34,10 @@ import kotlin.math.hypot
  *    (`Win + V`), `ACTION_SET_TEXT` (IME Relay), and `GLOBAL_ACTION_BACK` (Window Close).
  */
 class DesktopPointerAccessibilityService : AccessibilityService() {
+
+    private var pendingRefreshJob: Job? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var lastObservedWindowFingerprint: Int = 0
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -45,25 +56,32 @@ class DesktopPointerAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         when (event?.eventType) {
             AccessibilityEvent.TYPE_WINDOWS_CHANGED,
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                refreshExternalDisplayWindows()
-                if (event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
-                    inspectFocusedExternalEditor()
-                }
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                scheduleThrottledRefresh(checkEditor = false)
             }
-            AccessibilityEvent.TYPE_VIEW_FOCUSED,
-            AccessibilityEvent.TYPE_VIEW_CLICKED -> {
-                refreshExternalDisplayWindows()
-                inspectFocusedExternalEditor()
+            AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
+                scheduleThrottledRefresh(checkEditor = true)
             }
             else -> Unit
+        }
+    }
+
+    private fun scheduleThrottledRefresh(checkEditor: Boolean) {
+        if (pendingRefreshJob?.isActive == true) return
+        pendingRefreshJob = serviceScope.launch {
+            delay(150)
+            refreshExternalDisplayWindows()
+            if (checkEditor) {
+                inspectFocusedExternalEditor()
+            }
         }
     }
 
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
+        pendingRefreshJob?.cancel()
+        serviceScope.cancel()
         if (instance === this) {
             instance = null
         }
@@ -117,6 +135,12 @@ class DesktopPointerAccessibilityService : AccessibilityService() {
                 focusedExternalPkg = rootPkg
             }
         }
+
+        val fingerprint = (focusedExternalPkg?.hashCode() ?: 0) * 31 + frames.size
+        if (fingerprint == lastObservedWindowFingerprint && frames.isNotEmpty()) {
+            return
+        }
+        lastObservedWindowFingerprint = fingerprint
 
         app.pointerFocusBridge.updateDetectedExternalWindows(
             bounds = detectedRects,
