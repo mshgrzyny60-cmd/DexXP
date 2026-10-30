@@ -90,36 +90,34 @@ class AppLauncher(
         val optionsBundle = buildLaunchActivityOptions(
             targetDisplayId = targetDisplayId,
             isTvMode = isTvMode,
-            launchBounds = if (targetDisplayId != Display.DEFAULT_DISPLAY) bounds else null
+            launchBounds = if (!isTvMode) bounds else null
         )
 
         val dispatcherContext = launchContext ?: appContext
         val a11y = DesktopPointerAccessibilityService.instance
 
         fun recordLaunch() {
-            if (targetDisplayId != Display.DEFAULT_DISPLAY) {
-                if (isTvMode) {
-                    sessionRepository.recordWindowLaunched(
-                        packageName = app.packageName,
-                        activityName = app.activityName,
-                        label = app.label,
-                        bounds = bounds,
-                        snapMode = WindowSnapMode.MAXIMIZED,
-                        displayId = targetDisplayId
-                    )
-                } else {
-                    if (snapMode == WindowSnapMode.FREEFORM_CASCADED) {
-                        rememberedBounds[app.packageName] = Rect(bounds)
-                    }
-                    sessionRepository.recordWindowLaunched(
-                        packageName = app.packageName,
-                        activityName = app.activityName,
-                        label = app.label,
-                        bounds = bounds,
-                        snapMode = snapMode,
-                        displayId = targetDisplayId
-                    )
+            if (isTvMode) {
+                sessionRepository.recordWindowLaunched(
+                    packageName = app.packageName,
+                    activityName = app.activityName,
+                    label = app.label,
+                    bounds = bounds,
+                    snapMode = WindowSnapMode.MAXIMIZED,
+                    displayId = targetDisplayId
+                )
+            } else {
+                if (snapMode == WindowSnapMode.FREEFORM_CASCADED) {
+                    rememberedBounds[app.packageName] = Rect(bounds)
                 }
+                sessionRepository.recordWindowLaunched(
+                    packageName = app.packageName,
+                    activityName = app.activityName,
+                    label = app.label,
+                    bounds = bounds,
+                    snapMode = snapMode,
+                    displayId = targetDisplayId
+                )
             }
         }
 
@@ -171,24 +169,22 @@ class AppLauncher(
         val effectiveBounds = customBounds ?: computeWindowBounds(recordPackageKey, displayInfo, snapMode)
         val optionsBundle = buildFreeformActivityOptions(
             targetDisplayId = targetDisplayId,
-            launchBounds = if (targetDisplayId != Display.DEFAULT_DISPLAY) effectiveBounds else null
+            launchBounds = effectiveBounds
         )
 
         return runCatching {
             (launchContext ?: appContext).startActivity(intent, optionsBundle)
-            if (targetDisplayId != Display.DEFAULT_DISPLAY) {
-                if (snapMode == WindowSnapMode.FREEFORM_CASCADED) {
-                    rememberedBounds[recordPackageKey] = Rect(effectiveBounds)
-                }
-                sessionRepository.recordWindowLaunched(
-                    packageName = recordPackageKey,
-                    activityName = intent.component?.className.orEmpty(),
-                    label = label,
-                    bounds = effectiveBounds,
-                    snapMode = snapMode,
-                    displayId = targetDisplayId
-                )
+            if (snapMode == WindowSnapMode.FREEFORM_CASCADED) {
+                rememberedBounds[recordPackageKey] = Rect(effectiveBounds)
             }
+            sessionRepository.recordWindowLaunched(
+                packageName = recordPackageKey,
+                activityName = intent.component?.className.orEmpty(),
+                label = label,
+                bounds = effectiveBounds,
+                snapMode = snapMode,
+                displayId = targetDisplayId
+            )
             true
         }.onFailure { err ->
             Log.e(TAG, "Failed launching custom intent for $recordPackageKey", err)
@@ -219,20 +215,18 @@ class AppLauncher(
         val bounds = computeWindowBounds(packageName, displayInfo, effectiveSnap)
         val bundle = buildFreeformActivityOptions(
             targetDisplayId = targetDisplayId,
-            launchBounds = if (targetDisplayId != Display.DEFAULT_DISPLAY) bounds else null
+            launchBounds = bounds
         )
         return runCatching {
             (launchContext ?: appContext).startActivity(fallbackIntent, bundle)
-            if (targetDisplayId != Display.DEFAULT_DISPLAY) {
-                sessionRepository.recordWindowLaunched(
-                    packageName = packageName,
-                    activityName = fallbackIntent.component?.className ?: "",
-                    label = packageName.substringAfterLast('.'),
-                    bounds = bounds,
-                    snapMode = effectiveSnap,
-                    displayId = targetDisplayId
-                )
-            }
+            sessionRepository.recordWindowLaunched(
+                packageName = packageName,
+                activityName = fallbackIntent.component?.className ?: "",
+                label = packageName.substringAfterLast('.'),
+                bounds = bounds,
+                snapMode = effectiveSnap,
+                displayId = targetDisplayId
+            )
             true
         }.getOrDefault(false)
     }
@@ -270,22 +264,20 @@ class AppLauncher(
 
         val optionsBundle = buildFreeformActivityOptions(
             targetDisplayId = targetDisplayId,
-            launchBounds = if (targetDisplayId != Display.DEFAULT_DISPLAY) safeBounds else null
+            launchBounds = safeBounds
         )
 
         return runCatching {
             (launchContext ?: appContext).startActivity(launchIntent, optionsBundle)
-            if (targetDisplayId != Display.DEFAULT_DISPLAY) {
-                rememberedBounds[packageName] = Rect(safeBounds)
-                sessionRepository.recordWindowLaunched(
-                    packageName = packageName,
-                    activityName = resolvedActivity,
-                    label = resolvedLabel,
-                    bounds = safeBounds,
-                    snapMode = snapMode,
-                    displayId = targetDisplayId
-                )
-            }
+            rememberedBounds[packageName] = Rect(safeBounds)
+            sessionRepository.recordWindowLaunched(
+                packageName = packageName,
+                activityName = resolvedActivity,
+                label = resolvedLabel,
+                bounds = safeBounds,
+                snapMode = snapMode,
+                displayId = targetDisplayId
+            )
             true
         }.onFailure { err ->
             Log.e(TAG, "Failed launching $packageName into preset bounds $safeBounds", err)
@@ -424,7 +416,7 @@ class AppLauncher(
         val bounds = computeWindowBounds("com.android.settings", displayInfo, WindowSnapMode.COMPACT_UTILITY)
         val bundle = buildFreeformActivityOptions(
             targetDisplayId = targetDisplayId,
-            launchBounds = if (targetDisplayId != Display.DEFAULT_DISPLAY) bounds else null
+            launchBounds = bounds
         )
         runCatching { (launchContext ?: appContext).startActivity(intent, bundle) }
     }
@@ -442,13 +434,11 @@ class AppLauncher(
         val bounds = computeWindowBounds("viewer.$mimeType", displayInfo, WindowSnapMode.FREEFORM_CASCADED)
         val bundle = buildFreeformActivityOptions(
             targetDisplayId = targetDisplayId,
-            launchBounds = if (targetDisplayId != Display.DEFAULT_DISPLAY) bounds else null
+            launchBounds = bounds
         )
         return runCatching {
             (launchContext ?: appContext).startActivity(viewIntent, bundle)
-            if (targetDisplayId != Display.DEFAULT_DISPLAY) {
-                sessionRepository.setShowDesktop(false)
-            }
+            sessionRepository.setShowDesktop(false)
             true
         }.getOrDefault(false)
     }
