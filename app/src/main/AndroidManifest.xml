@@ -130,7 +130,8 @@
             android:name=".browser.DesktopWebActivity"
             android:configChanges="density|fontScale|keyboard|keyboardHidden|layoutDirection|locale|mcc|mnc|navigation|orientation|screenLayout|screenSize|smallestScreenSize|touchscreen|uiMode"
             android:exported="false"
-            android:launchMode="singleTask"
+            android:launchMode="standard"
+            android:documentLaunchMode="intoExisting"
             android:resizeableActivity="true"
             android:theme="@style/Theme.DexXP" />
 

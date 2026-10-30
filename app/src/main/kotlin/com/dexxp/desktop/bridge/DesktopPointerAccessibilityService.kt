@@ -142,7 +142,7 @@ class DesktopPointerAccessibilityService : AccessibilityService() {
             }
         }
 
-        val fingerprint = (focusedExternalPkg?.hashCode() ?: 0) * 31 + frames.size
+        val fingerprint = (focusedExternalPkg?.hashCode() ?: 0) * 31 + frames.sumOf { it.bounds.hashCode() } + frames.size
         if (fingerprint == lastObservedWindowFingerprint && frames.isNotEmpty()) {
             return
         }

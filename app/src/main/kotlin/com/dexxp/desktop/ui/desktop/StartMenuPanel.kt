@@ -102,6 +102,8 @@ fun StartMenuPanel(
     val focusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
+        onSearchFocusChanged(true)
+        kotlinx.coroutines.delay(60)
         runCatching { focusRequester.requestFocus() }
     }
 

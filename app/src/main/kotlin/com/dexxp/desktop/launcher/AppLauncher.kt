@@ -68,9 +68,12 @@ class AppLauncher(
         snapMode: WindowSnapMode = WindowSnapMode.MAXIMIZED,
         launchContext: Context? = null
     ): Boolean {
-        if (sessionRepository.runningWindows.value.any { it.packageName == "com.lemon.lvoverseas" || it.packageName == "com.capcut.editor" }) {
-            sessionRepository.removeWindowRecord("com.lemon.lvoverseas")
-            sessionRepository.removeWindowRecord("com.capcut.editor")
+        sessionRepository.removeWindowRecord("com.lemon.lvoverseas")
+        sessionRepository.removeWindowRecord("com.capcut.editor")
+        runCatching {
+            val am = appContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            am?.killBackgroundProcesses("com.lemon.lvoverseas")
+            am?.killBackgroundProcesses("com.capcut.editor")
         }
         val displayInfo = sessionRepository.activeDisplay.value
         val intent = Intent(appContext, com.dexxp.desktop.browser.DesktopWebActivity::class.java).apply {

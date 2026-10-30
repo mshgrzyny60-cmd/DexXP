@@ -188,10 +188,11 @@ class DesktopWindowPresentation(
         scope.launch {
             combine(
                 sessionRepository.shellSurfaceMode,
+                sessionRepository.needsShellKeyboardFocus,
                 sessionRepository.environmentMode,
                 sessionRepository.launchingPackage,
                 keyboardManager.altTabState
-            ) { mode, envMode, launching, altTab ->
+            ) { mode, needsKeyboard, envMode, launching, altTab ->
                 val isTv = envMode == DesktopEnvironmentMode.TV_LEANBACK
                 val isLaunching = launching != null
                 val hasActiveApp = mode == ShellSurfaceMode.DOCKED_TASKBAR && !isLaunching
@@ -201,13 +202,15 @@ class DesktopWindowPresentation(
                     isTv -> ShellSurfaceMode.FULL_DESKTOP
                     else -> mode
                 }
-                Pair(effectiveMode, isTv)
+                val effectiveNeedsKeyboard = if (isTv) !hasActiveApp else (needsKeyboard || effectiveMode == ShellSurfaceMode.FLYOUT_ACTIVE)
+                Triple(effectiveMode, effectiveNeedsKeyboard, isTv)
             }.distinctUntilChanged()
-            .collect { (mode: ShellSurfaceMode, isTv: Boolean) ->
+            .collect { (mode: ShellSurfaceMode, needsKeyboard: Boolean, isTv: Boolean) ->
                 currentSurfaceMode = mode
                 pointerFocusBridge.applyPresentationWindowPolicy(
                     window = win,
                     mode = mode,
+                    needsKeyboardFocus = needsKeyboard,
                     displayWidthPx = displayWidthPx,
                     displayHeightPx = displayHeightPx,
                     densityDpi = scaledDensityDpi
@@ -279,7 +282,7 @@ class DesktopWindowPresentation(
     private fun computeCurrentScreenBounds(): Rect {
         return if (currentSurfaceMode == ShellSurfaceMode.DOCKED_TASKBAR) {
             val taskbarPx = computeTaskbarHeightPx()
-            Rect(0, (displayHeightPx - taskbarPx).coerceAtLeast(0), displayWidthPx, maxOf(displayHeightPx, 1080) + 100)
+            Rect(0, (displayHeightPx - taskbarPx).coerceAtLeast(0), displayWidthPx, displayHeightPx)
         } else {
             Rect(0, 0, displayWidthPx, displayHeightPx)
         }
@@ -306,7 +309,7 @@ class DesktopWindowPresentation(
         WindowCompat.setDecorFitsSystemWindows(win, false)
         WindowInsetsControllerCompat(win, win.decorView).apply {
             hide(WindowInsetsCompat.Type.systemBars())
-            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
         }
     }
 

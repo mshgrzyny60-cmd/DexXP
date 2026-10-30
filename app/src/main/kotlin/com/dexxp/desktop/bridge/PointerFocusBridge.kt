@@ -234,7 +234,8 @@ class PointerFocusBridge(
         val shouldBeFocusable = when {
             isTvMode && hasActiveApp -> false
             mode == ShellSurfaceMode.DOCKED_TASKBAR -> false
-            else -> true
+            mode == ShellSurfaceMode.FLYOUT_ACTIVE -> true
+            else -> needsKeyboardFocus
         }
         flags = if (shouldBeFocusable) {
             flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()

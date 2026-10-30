@@ -24,18 +24,30 @@ object SystemFlagsInspector {
     const val KEY_FORCE_DESKTOP_MODE_EXTERNAL = "force_desktop_mode_on_external_displays"
     const val KEY_ENABLE_NON_RESIZABLE_MULTI_WINDOW = "enable_non_resizable_multi_window"
 
-    fun inspect(context: Context): SystemReadinessStatus {
+    @Volatile
+    private var cachedStatus: SystemReadinessStatus? = null
+
+    @Volatile
+    private var lastInspectElapsedMs: Long = 0L
+
+    fun inspect(context: Context, force: Boolean = false): SystemReadinessStatus {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val existing = cachedStatus
+        if (!force && existing != null && (now - lastInspectElapsedMs) < 15_000L) {
+            return existing
+        }
+
         val resolver = context.contentResolver
-        val hasFreeformFeature = context.packageManager.hasSystemFeature(
-            PackageManager.FEATURE_FREEFORM_WINDOW_MANAGEMENT
-        )
+        val hasFreeformFeature = runCatching {
+            context.packageManager.hasSystemFeature(PackageManager.FEATURE_FREEFORM_WINDOW_MANAGEMENT)
+        }.getOrDefault(false)
 
         val freeformGlobal = readGlobalInt(resolver, KEY_ENABLE_FREEFORM_SUPPORT) == 1
         val forceResizable = readGlobalInt(resolver, KEY_FORCE_RESIZABLE_ACTIVITIES) == 1
         val forceDesktopExternal = readGlobalInt(resolver, KEY_FORCE_DESKTOP_MODE_EXTERNAL) == 1
         val nonResizableMultiWindow = readGlobalInt(resolver, KEY_ENABLE_NON_RESIZABLE_MULTI_WINDOW) == 1
 
-        val overlayGranted = Settings.canDrawOverlays(context)
+        val overlayGranted = runCatching { Settings.canDrawOverlays(context) }.getOrDefault(false)
         val accessibilityEnabled = isAccessibilityServiceEnabled(context)
         val notificationListenerGranted = isNotificationListenerEnabled(context)
         val notificationsGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -47,7 +59,7 @@ object SystemFlagsInspector {
             true
         }
 
-        return SystemReadinessStatus(
+        val result = SystemReadinessStatus(
             freeformSupportEnabled = hasFreeformFeature || freeformGlobal,
             forceResizableEnabled = forceResizable,
             desktopModeExternalEnabled = forceDesktopExternal,
@@ -57,6 +69,9 @@ object SystemFlagsInspector {
             notificationListenerEnabled = notificationListenerGranted,
             notificationPermissionGranted = notificationsGranted
         )
+        cachedStatus = result
+        lastInspectElapsedMs = now
+        return result
     }
 
     private fun readGlobalInt(

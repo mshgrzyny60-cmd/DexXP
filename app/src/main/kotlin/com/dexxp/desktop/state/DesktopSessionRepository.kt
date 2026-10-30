@@ -22,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -200,7 +201,9 @@ class DesktopSessionRepository(context: Context) {
     }.stateIn(scope, SharingStarted.Eagerly, ShellSurfaceMode.FULL_DESKTOP)
 
     fun refreshSystemReadiness() {
-        _systemReadiness.value = SystemFlagsInspector.inspect(appContext)
+        scope.launch(Dispatchers.IO) {
+            _systemReadiness.value = SystemFlagsInspector.inspect(appContext, force = true)
+        }
     }
 
     fun updateActiveDisplay(info: ExternalDisplayInfo?) {
@@ -246,12 +249,14 @@ class DesktopSessionRepository(context: Context) {
         val next = !_isStartMenuOpen.value
         dismissFlyouts()
         _isStartMenuOpen.value = next
+        _isSearchFieldFocused.value = next
     }
 
     fun setStartMenuOpen(open: Boolean) {
         if (open) {
             dismissFlyouts()
             _isStartMenuOpen.value = true
+            _isSearchFieldFocused.value = true
         } else {
             _isStartMenuOpen.value = false
             _isSearchFieldFocused.value = false
