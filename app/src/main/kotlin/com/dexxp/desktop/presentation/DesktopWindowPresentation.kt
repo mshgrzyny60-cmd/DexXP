@@ -6,7 +6,6 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
-import android.provider.Settings
 import android.view.Display
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -288,11 +287,6 @@ class DesktopWindowPresentation(
     }
 
     private fun configureExternalWindow(win: Window) {
-        runCatching {
-            if (Settings.canDrawOverlays(context)) {
-                win.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
-            }
-        }
         win.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         win.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
         win.addFlags(

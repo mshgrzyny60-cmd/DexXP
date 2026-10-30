@@ -265,7 +265,7 @@ fun DesktopWorkspaceRoot(
 
     when (effectiveMode) {
         ShellSurfaceMode.DOCKED_TASKBAR -> {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+            Box(modifier = Modifier.fillMaxSize()) {
                 DesktopTaskbar(
                     apps = apps,
                     pinnedPackages = pinnedPackages,
@@ -286,9 +286,7 @@ fun DesktopWorkspaceRoot(
                     isShowDesktopActive = false,
                     displayInfo = displayInfo,
                     dpiScale = dpiScale,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(AppLauncher.TASKBAR_HEIGHT_DP.dp),
+                    modifier = Modifier.fillMaxSize(),
                     onToggleStartMenu = sessionRepository::toggleStartMenu,
                     onOpenCommandPalette = commandPaletteController::togglePalette,
                     onToggleMissionControl = missionControlController::toggleOverview,

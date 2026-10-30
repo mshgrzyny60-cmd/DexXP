@@ -204,7 +204,7 @@ class PointerFocusBridge(
                 Triple(0, 0, Gravity.TOP or Gravity.START)
             }
             mode == ShellSurfaceMode.DOCKED_TASKBAR -> {
-                Triple(WindowManager.LayoutParams.MATCH_PARENT, taskbarHeightPx + 16, Gravity.BOTTOM or Gravity.START)
+                Triple(WindowManager.LayoutParams.MATCH_PARENT, taskbarHeightPx, Gravity.BOTTOM or Gravity.START)
             }
             else -> {
                 Triple(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, Gravity.BOTTOM or Gravity.START)
@@ -220,13 +220,14 @@ class PointerFocusBridge(
         var flags = prevFlags
         flags = flags or
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
         flags = flags and WindowManager.LayoutParams.FLAG_DIM_BEHIND.inv()
 
         if (mode == ShellSurfaceMode.DOCKED_TASKBAR) {
+            flags = flags and WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN.inv()
             flags = flags and WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH.inv()
         } else {
+            flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
             flags = flags or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
         }
 
