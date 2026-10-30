@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- High-Performance Desktop Web Engine & Network Access -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- Enumerate all launchable desktop apps in StartMenu & AppLauncher on API 30+ -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"

@@ -88,12 +88,12 @@ class DesktopBrowserLauncher(
     )
 
     /**
-     * Launches a standalone borderless Freeform Desktop Web App instance on the secondary display
+     * Launches a standalone borderless Fullscreen Desktop Web App instance on the secondary display
      * using the dedicated Desktop Web Engine (guaranteed Desktop User-Agent, zero mobile redirects).
      */
     fun launchWebApp(
         webApp: DesktopWebAppDefinition,
-        snapMode: WindowSnapMode = WindowSnapMode.FREEFORM_CASCADED,
+        snapMode: WindowSnapMode = WindowSnapMode.MAXIMIZED,
         launchContext: Context? = null
     ): Boolean {
         val displayInfo = sessionRepository.activeDisplay.value
@@ -102,7 +102,7 @@ class DesktopBrowserLauncher(
             putExtra(DesktopWebActivity.EXTRA_TITLE, webApp.title)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
         }
-        val bounds = computeDesktopViewportBounds(displayInfo, snapMode)
+        val bounds = Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
         return appLauncher.launchCustomIntentInFreeform(
             intent = intent,
             recordPackageKey = "dexxp.webapp.${webApp.id}",
@@ -118,7 +118,7 @@ class DesktopBrowserLauncher(
      */
     fun launchDesktopBrowserSession(
         url: String = DEFAULT_DESKTOP_START_URL,
-        snapMode: WindowSnapMode = WindowSnapMode.FREEFORM_CASCADED,
+        snapMode: WindowSnapMode = WindowSnapMode.MAXIMIZED,
         launchContext: Context? = null
     ): Boolean {
         val displayInfo = sessionRepository.activeDisplay.value
@@ -129,7 +129,7 @@ class DesktopBrowserLauncher(
             browserPackage = browserPkg,
             borderlessWebAppMode = false
         )
-        val bounds = computeDesktopViewportBounds(displayInfo, snapMode)
+        val bounds = Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
         return appLauncher.launchCustomIntentInFreeform(
             intent = intent,
             recordPackageKey = browserPkg ?: "com.android.chrome",

@@ -138,14 +138,15 @@ class AppLauncher(
         recordPackageKey: String,
         label: String,
         customBounds: Rect?,
-        snapMode: WindowSnapMode = WindowSnapMode.FREEFORM_CASCADED,
+        snapMode: WindowSnapMode = WindowSnapMode.MAXIMIZED,
         launchContext: Context? = null
     ): Boolean {
         val displayInfo = sessionRepository.activeDisplay.value
         val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
-        val effectiveBounds = customBounds ?: computeWindowBounds(recordPackageKey, displayInfo, snapMode)
-        val optionsBundle = buildFreeformActivityOptions(
+        val effectiveBounds = customBounds ?: Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+        val optionsBundle = buildLaunchActivityOptions(
             targetDisplayId = targetDisplayId,
+            isTvMode = false,
             launchBounds = effectiveBounds
         )
 
@@ -158,9 +159,7 @@ class AppLauncher(
             targetPackage = recordPackageKey
         )
         if (launched) {
-            if (snapMode == WindowSnapMode.FREEFORM_CASCADED) {
-                rememberedBounds[recordPackageKey] = Rect(effectiveBounds)
-            }
+            rememberedBounds[recordPackageKey] = Rect(effectiveBounds)
             sessionRepository.recordWindowLaunched(
                 packageName = recordPackageKey,
                 activityName = intent.component?.className.orEmpty(),
@@ -184,7 +183,7 @@ class AppLauncher(
                 ?: sessionRepository.runningWindows.value
                     .firstOrNull { it.packageName == packageName }
                     ?.snapMode
-                ?: WindowSnapMode.FREEFORM_CASCADED
+                ?: WindowSnapMode.MAXIMIZED
             return launchApp(item, effectiveSnap, newInstance = false, launchContext = launchContext)
         }
 
@@ -193,9 +192,9 @@ class AppLauncher(
         fallbackIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
         val displayInfo = sessionRepository.activeDisplay.value
         val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
-        val effectiveSnap = snapMode ?: WindowSnapMode.FREEFORM_CASCADED
-        val bounds = computeWindowBounds(packageName, displayInfo, effectiveSnap)
-        val bundle = buildFreeformActivityOptions(
+        val effectiveSnap = snapMode ?: WindowSnapMode.MAXIMIZED
+        val bounds = Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+        val bundle = buildLaunchActivityOptions(
             targetDisplayId = targetDisplayId,
             launchBounds = bounds
         )
@@ -569,9 +568,6 @@ class AppLauncher(
     ): Bundle {
         val options = ActivityOptions.makeBasic().apply {
             setLaunchDisplayId(targetDisplayId)
-            if (launchBounds != null) {
-                setLaunchBounds(launchBounds)
-            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 setPendingIntentBackgroundActivityStartMode(
                     ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
@@ -579,17 +575,18 @@ class AppLauncher(
             }
         }
 
-        val targetWindowingMode = if (isTvMode) WINDOWING_MODE_FULLSCREEN else WINDOWING_MODE_FREEFORM
-        if (launchBounds != null) {
-            runCatching {
-                setLaunchWindowingModeMethod?.invoke(options, targetWindowingMode)
-            }
+        // Always enforce FULLSCREEN windowing mode on secondary displays (both TV and Desktop/scrcpy modes).
+        // On Xiaomi MIUI/HyperOS, passing WINDOWING_MODE_FREEFORM (5) triggers Xiaomi's proprietary
+        // phone-shaped floating window container with vertical constraints and camera notches.
+        // FULLSCREEN mode gives apps (Chrome, CapCut, YouTube, etc.) the full 16:9 widescreen canvas (>960dp width),
+        // allowing them to switch automatically to their tablet/desktop UI with full tabs and timelines.
+        val targetWindowingMode = WINDOWING_MODE_FULLSCREEN
+        runCatching {
+            setLaunchWindowingModeMethod?.invoke(options, targetWindowingMode)
         }
 
         return options.toBundle().apply {
-            if (launchBounds != null) {
-                putInt(KEY_LAUNCH_WINDOWING_MODE, targetWindowingMode)
-            }
+            putInt(KEY_LAUNCH_WINDOWING_MODE, targetWindowingMode)
         }
     }
 
