@@ -278,8 +278,6 @@ class DisplayRouterService : Service() {
         dexApp.desktopFileManager.reloadFiles()
         dexApp.phoneScreenPowerController.onExternalDisplayStateChanged(attached = true)
 
-        launchSecondaryBackdropActivity(display.displayId)
-
         val presentation = DesktopWindowPresentation(
             scaledDisplayContext = scaledDisplayContext,
             display = display,
@@ -319,30 +317,6 @@ class DisplayRouterService : Service() {
         }.onFailure { err ->
             Log.e(TAG, "Failed showing DesktopWindowPresentation on display ${display.displayId}", err)
             teardownActivePresentation()
-        }
-    }
-
-    private fun launchSecondaryBackdropActivity(targetDisplayId: Int) {
-        val intent = Intent(this, SecondaryDesktopActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        }
-        val bundle = dexApp.appLauncher.buildLaunchActivityOptions(targetDisplayId)
-        val directStarted = runCatching {
-            startActivity(intent, bundle)
-            true
-        }.getOrDefault(false)
-
-        if (!directStarted) {
-            runCatching {
-                val pi = PendingIntent.getActivity(
-                    this,
-                    2001,
-                    intent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                    bundle
-                )
-                pi.send(this, 0, null, null, null, null, bundle)
-            }
         }
     }
 

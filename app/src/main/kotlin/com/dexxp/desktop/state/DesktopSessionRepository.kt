@@ -522,12 +522,10 @@ class DesktopSessionRepository(context: Context) {
         val env = _environmentMode.value
 
         if (!hasVisibleExternalApp) {
-            if (env == DesktopEnvironmentMode.TV_LEANBACK) {
-                // When an active TV app finishes or exits with Back, immediately return to TV home!
-                _isShowDesktopActive.value = true
-                _runningWindows.update { list ->
-                    list.map { it.copy(isMinimized = true, isFocused = false) }
-                }
+            // When no active apps are visible on display, immediately return to full desktop wallpaper & icons
+            _isShowDesktopActive.value = true
+            _runningWindows.update { list ->
+                list.map { it.copy(isMinimized = true, isFocused = false) }
             }
         } else {
             val launching = _launchingPackage.value

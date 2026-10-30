@@ -351,11 +351,8 @@ class AppLauncher(
     fun sendSecondaryHomeToFront(launchContext: Context? = null) {
         val displayId = sessionRepository.activeDisplay.value?.displayId ?: Display.DEFAULT_DISPLAY
         if (displayId != Display.DEFAULT_DISPLAY) {
-            val homeIntent = Intent(appContext, SecondaryDesktopActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            }
-            val optsBundle = buildLaunchActivityOptions(displayId)
-            dispatchActivityIntent(launchContext ?: appContext, homeIntent, optsBundle, displayId, appContext.packageName)
+            sessionRepository.setShowDesktop(true)
+            sessionRepository.dismissFlyouts()
         } else {
             val standaloneIntent = Intent(appContext, StandaloneDesktopActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
