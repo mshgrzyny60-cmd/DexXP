@@ -6,6 +6,11 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.provider.Settings
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -54,7 +59,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -1569,20 +1576,45 @@ private fun TaskbarAppButton(
     val isHovered by interactionSource.collectIsHoveredAsState()
     var menuOpen by remember { mutableStateOf(false) }
 
+    val scale by animateFloatAsState(
+        targetValue = if (isHovered) 1.05f else 1.0f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "taskbarBtnScale"
+    )
+
+    val indicatorWidth by animateDpAsState(
+        targetValue = when {
+            entry.isFocused -> 22.dp
+            entry.isRunning && !entry.isMinimized -> 10.dp
+            entry.isMinimized -> 4.dp
+            else -> 0.dp
+        },
+        animationSpec = spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow),
+        label = "taskbarIndicatorW"
+    )
+
+    val targetBg = when {
+        entry.isFocused -> MaterialTheme.colorScheme.secondaryContainer
+        isHovered -> MaterialTheme.colorScheme.surfaceContainerHighest
+        entry.isRunning && !entry.isMinimized -> MaterialTheme.colorScheme.surfaceContainerHigh
+        entry.isMinimized -> MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.45f)
+        else -> Color.Transparent
+    }
+    val animatedBg by animateColorAsState(targetBg, label = "taskbarBtnBg")
+
+    val iconAlpha by animateFloatAsState(
+        targetValue = if (entry.isMinimized) 0.58f else 1.0f,
+        label = "taskbarIconAlpha"
+    )
+
     Box {
         Column(
             modifier = Modifier
                 .height(42.dp)
+                .scale(scale)
                 .clip(RoundedCornerShape(12.dp))
                 .hoverable(interactionSource)
-                .background(
-                    when {
-                        entry.isFocused -> MaterialTheme.colorScheme.secondaryContainer
-                        isHovered -> MaterialTheme.colorScheme.surfaceContainerHighest
-                        entry.isRunning -> MaterialTheme.colorScheme.surfaceContainerHigh
-                        else -> Color.Transparent
-                    }
-                )
+                .background(animatedBg)
                 .desktopSecondaryClick { menuOpen = true }
                 .combinedClickable(
                     onClick = onClick,
@@ -1599,12 +1631,14 @@ private fun TaskbarAppButton(
                         contentDescription = entry.label,
                         modifier = Modifier
                             .size(24.dp)
+                            .alpha(iconAlpha)
                             .clip(RoundedCornerShape(6.dp))
                     )
                 } else {
                     Box(
                         modifier = Modifier
                             .size(24.dp)
+                            .alpha(iconAlpha)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primaryContainer),
                         contentAlignment = Alignment.Center
@@ -1621,8 +1655,9 @@ private fun TaskbarAppButton(
                     Text(
                         text = entry.label,
                         style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (entry.isFocused) FontWeight.SemiBold else FontWeight.Normal,
                         color = if (entry.isMinimized) {
-                            MaterialTheme.colorScheme.onSurfaceVariant
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         } else {
                             MaterialTheme.colorScheme.onSurface
                         },
@@ -1635,14 +1670,14 @@ private fun TaskbarAppButton(
             if (entry.isRunning) {
                 Box(
                     modifier = Modifier
-                        .width(if (entry.isFocused) 18.dp else 7.dp)
+                        .width(indicatorWidth)
                         .height(3.dp)
                         .clip(RoundedCornerShape(50))
                         .background(
                             when {
                                 entry.isFocused -> MaterialTheme.colorScheme.primary
-                                entry.isMinimized -> MaterialTheme.colorScheme.outlineVariant
-                                else -> MaterialTheme.colorScheme.outline
+                                entry.isMinimized -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+                                else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
                             }
                         )
                 )
@@ -1653,12 +1688,13 @@ private fun TaskbarAppButton(
             expanded = menuOpen,
             onDismissRequest = { menuOpen = false }
         ) {
-            DropdownMenuItem(
-                text = { Text("Focus / Restore Freeform") },
-                leadingIcon = { Icon(DesktopIcons.WindowFreeform, null, Modifier.size(18.dp)) },
-                onClick = { menuOpen = false; onSnap(WindowSnapMode.FREEFORM_CASCADED) }
-            )
-            if (entry.isRunning && !entry.isMinimized) {
+            if (entry.isMinimized) {
+                DropdownMenuItem(
+                    text = { Text("Restore Window") },
+                    leadingIcon = { Icon(DesktopIcons.Maximize, null, Modifier.size(18.dp)) },
+                    onClick = { menuOpen = false; onClick() }
+                )
+            } else if (entry.isRunning) {
                 DropdownMenuItem(
                     text = { Text("Minimize to Taskbar") },
                     leadingIcon = { Icon(DesktopIcons.Minimize, null, Modifier.size(18.dp)) },
@@ -1666,39 +1702,14 @@ private fun TaskbarAppButton(
                 )
             }
             DropdownMenuItem(
-                text = { Text("Snap Left 50%") },
-                leadingIcon = { Icon(DesktopIcons.SplitLeft, null, Modifier.size(18.dp)) },
-                onClick = { menuOpen = false; onSnap(WindowSnapMode.LEFT_HALF) }
-            )
-            DropdownMenuItem(
-                text = { Text("Snap Right 50%") },
-                leadingIcon = { Icon(DesktopIcons.SplitRight, null, Modifier.size(18.dp)) },
-                onClick = { menuOpen = false; onSnap(WindowSnapMode.RIGHT_HALF) }
-            )
-            DropdownMenuItem(
-                text = { Text("Maximize") },
-                leadingIcon = { Icon(DesktopIcons.Maximize, null, Modifier.size(18.dp)) },
-                onClick = { menuOpen = false; onSnap(WindowSnapMode.MAXIMIZED) }
-            )
-            DropdownMenuItem(
-                text = { Text("Top-Left Quadrant (25%)") },
-                leadingIcon = { Icon(DesktopIcons.WindowFreeform, null, Modifier.size(18.dp)) },
-                onClick = { menuOpen = false; onSnap(WindowSnapMode.TOP_LEFT_QUADRANT) }
-            )
-            DropdownMenuItem(
-                text = { Text("Bottom-Right Quadrant (25%)") },
-                leadingIcon = { Icon(DesktopIcons.WindowFreeform, null, Modifier.size(18.dp)) },
-                onClick = { menuOpen = false; onSnap(WindowSnapMode.BOTTOM_RIGHT_QUADRANT) }
-            )
-            HorizontalDivider()
-            DropdownMenuItem(
                 text = { Text(if (entry.isPinned) "Unpin from Taskbar" else "Pin to Taskbar") },
                 leadingIcon = { Icon(DesktopIcons.Pin, null, Modifier.size(18.dp)) },
                 onClick = { menuOpen = false; onTogglePin() }
             )
             if (entry.isRunning) {
+                HorizontalDivider()
                 DropdownMenuItem(
-                    text = { Text("Close Window") },
+                    text = { Text("Close App") },
                     leadingIcon = { Icon(DesktopIcons.Close, null, Modifier.size(18.dp)) },
                     onClick = { menuOpen = false; onCloseRecord() }
                 )

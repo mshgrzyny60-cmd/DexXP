@@ -13,6 +13,7 @@ import android.provider.Settings
 import android.util.Log
 import android.view.Display
 import com.dexxp.desktop.SecondaryDesktopActivity
+import com.dexxp.desktop.StandaloneDesktopActivity
 import com.dexxp.desktop.bridge.DesktopPointerAccessibilityService
 import com.dexxp.desktop.model.DesktopAppItem
 import com.dexxp.desktop.model.DesktopEnvironmentMode
@@ -49,25 +50,12 @@ class AppLauncher(
 
     fun launchApp(
         app: DesktopAppItem,
-        snapMode: WindowSnapMode = WindowSnapMode.FREEFORM_CASCADED,
+        snapMode: WindowSnapMode = WindowSnapMode.MAXIMIZED,
         newInstance: Boolean = false,
         launchContext: Context? = null
     ): Boolean {
         val displayInfo = sessionRepository.activeDisplay.value
         val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
-
-        val isTvMode = sessionRepository.environmentMode.value == DesktopEnvironmentMode.TV_LEANBACK
-        val bounds = if (isTvMode) {
-            val w = displayInfo?.widthPx ?: 1920
-            val h = displayInfo?.heightPx ?: 1080
-            Rect(0, 0, w, h)
-        } else {
-            computeWindowBounds(
-                packageName = app.packageName,
-                displayInfo = displayInfo,
-                snapMode = snapMode
-            )
-        }
 
         val baseIntent = appContext.packageManager.getLaunchIntentForPackage(app.packageName)
         val intent = if (baseIntent != null) {
@@ -76,8 +64,6 @@ class AppLauncher(
                     addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
                 }
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT)
-                putExtra("miui.floating_window", !isTvMode)
-                putExtra("android.activity.windowingMode", if (isTvMode) WINDOWING_MODE_FULLSCREEN else WINDOWING_MODE_FREEFORM)
             }
         } else {
             Intent(Intent.ACTION_MAIN).apply {
@@ -87,42 +73,31 @@ class AppLauncher(
                 if (newInstance) {
                     addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
                 }
-                putExtra("miui.floating_window", !isTvMode)
-                putExtra("android.activity.windowingMode", if (isTvMode) WINDOWING_MODE_FULLSCREEN else WINDOWING_MODE_FREEFORM)
             }
         }
 
-        val optionsBundle = buildLaunchActivityOptions(
-            targetDisplayId = targetDisplayId,
-            isTvMode = isTvMode,
-            launchBounds = bounds
-        )
+        val options = ActivityOptions.makeBasic().apply {
+            setLaunchDisplayId(targetDisplayId)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                setPendingIntentBackgroundActivityStartMode(
+                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                )
+            }
+        }
+        val optionsBundle = options.toBundle()
 
         val dispatcherContext = launchContext ?: appContext
 
         fun recordLaunch() {
-            if (isTvMode) {
-                sessionRepository.recordWindowLaunched(
-                    packageName = app.packageName,
-                    activityName = app.activityName,
-                    label = app.label,
-                    bounds = bounds,
-                    snapMode = WindowSnapMode.MAXIMIZED,
-                    displayId = targetDisplayId
-                )
-            } else {
-                if (snapMode == WindowSnapMode.FREEFORM_CASCADED) {
-                    rememberedBounds[app.packageName] = Rect(bounds)
-                }
-                sessionRepository.recordWindowLaunched(
-                    packageName = app.packageName,
-                    activityName = app.activityName,
-                    label = app.label,
-                    bounds = bounds,
-                    snapMode = snapMode,
-                    displayId = targetDisplayId
-                )
-            }
+            sessionRepository.setShowDesktop(false)
+            sessionRepository.recordWindowLaunched(
+                packageName = app.packageName,
+                activityName = app.activityName,
+                label = app.label,
+                bounds = Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080),
+                snapMode = WindowSnapMode.MAXIMIZED,
+                displayId = targetDisplayId
+            )
         }
 
         val launched = dispatchActivityIntent(
@@ -297,12 +272,16 @@ class AppLauncher(
 
         sessionRepository.setWindowMinimized(packageName, minimized = true)
         val remainingVisible = sessionRepository.runningWindows.value
-            .filterNot { it.isMinimized }
-            .sortedBy { it.lastActiveEpochMs }
+            .filterNot { it.isMinimized || it.packageName == packageName }
+            .sortedByDescending { it.lastActiveEpochMs }
 
-        sendSecondaryHomeToFront(launchContext)
-        for (win in remainingVisible) {
-            launchOrFocusPackage(win.packageName, win.snapMode, launchContext)
+        if (remainingVisible.isEmpty()) {
+            sendSecondaryHomeToFront(launchContext)
+            sessionRepository.setShowDesktop(true)
+        } else {
+            val nextTop = remainingVisible.first()
+            sessionRepository.setWindowMinimized(nextTop.packageName, minimized = false)
+            launchOrFocusPackage(nextTop.packageName, nextTop.snapMode, launchContext)
         }
     }
 
@@ -322,23 +301,23 @@ class AppLauncher(
     }
 
     /**
-     * Closes the target Freeform window by dispatching `GLOBAL_ACTION_BACK`, backgrounding
-     * behind `SecondaryDesktopActivity`, and terminating background task processes.
+     * Closes the target window by backgrounding behind the desktop shell and terminating processes.
      */
     fun closeWindow(packageName: String, launchContext: Context? = null) {
         DesktopPointerAccessibilityService.instance?.dispatchGlobalBackForClose()
         sessionRepository.removeWindowRecord(packageName)
 
         val remainingVisible = sessionRepository.runningWindows.value
-            .filterNot { it.isMinimized }
-            .sortedBy { it.lastActiveEpochMs }
+            .filterNot { it.isMinimized || it.packageName == packageName }
+            .sortedByDescending { it.lastActiveEpochMs }
 
         if (remainingVisible.isEmpty()) {
             sendSecondaryHomeToFront(launchContext)
+            sessionRepository.setShowDesktop(true)
         } else {
-            for (win in remainingVisible) {
-                launchOrFocusPackage(win.packageName, win.snapMode, launchContext)
-            }
+            val nextTop = remainingVisible.first()
+            sessionRepository.setWindowMinimized(nextTop.packageName, minimized = false)
+            launchOrFocusPackage(nextTop.packageName, nextTop.snapMode, launchContext)
         }
 
         runCatching {
@@ -348,20 +327,26 @@ class AppLauncher(
     }
 
     fun sendSecondaryHomeToFront(launchContext: Context? = null) {
-        val displayId = sessionRepository.activeDisplay.value?.displayId ?: return
-        if (displayId == Display.DEFAULT_DISPLAY) return
-        val homeIntent = Intent(appContext, SecondaryDesktopActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        }
-        val opts = ActivityOptions.makeBasic().apply {
-            setLaunchDisplayId(displayId)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                setPendingIntentBackgroundActivityStartMode(
-                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
-                )
+        val displayId = sessionRepository.activeDisplay.value?.displayId ?: Display.DEFAULT_DISPLAY
+        if (displayId != Display.DEFAULT_DISPLAY) {
+            val homeIntent = Intent(appContext, SecondaryDesktopActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             }
+            val opts = ActivityOptions.makeBasic().apply {
+                setLaunchDisplayId(displayId)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    setPendingIntentBackgroundActivityStartMode(
+                        ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                    )
+                }
+            }
+            dispatchActivityIntent(launchContext ?: appContext, homeIntent, opts.toBundle(), displayId)
+        } else {
+            val standaloneIntent = Intent(appContext, StandaloneDesktopActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            }
+            runCatching { (launchContext ?: appContext).startActivity(standaloneIntent) }
         }
-        runCatching { (launchContext ?: appContext).startActivity(homeIntent, opts.toBundle()) }
     }
 
     fun restoreWorkspaceWindows(windows: List<RunningWindowRecord>, launchContext: Context? = null) {

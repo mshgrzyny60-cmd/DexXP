@@ -309,10 +309,7 @@ class DisplayRouterService : Service() {
             presentation.show()
             activePresentation = presentation
             attachedDisplayId = display.displayId
-            // Attach 28dp floating window titlebar in Freeform mode, then cursor HUD above it
-            if (dexApp.sessionRepository.environmentMode.value == DesktopEnvironmentMode.DESKTOP_FREEFORM) {
-                titlebarOverlayController.attachToDisplay(display, scaledDisplayContext)
-            }
+            // Top-most cursor HUD overlay above desktop
             cursorOverlayController.attachToDisplay(display)
             promoteToForeground(
                 statusText = "${info.name} • ${info.resolutionSummary} (${targetDpi}dpi)"
