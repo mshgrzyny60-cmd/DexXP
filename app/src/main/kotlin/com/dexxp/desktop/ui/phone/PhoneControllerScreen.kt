@@ -1137,10 +1137,10 @@ private fun PhoneTvRemoteDpad(
                 },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 12.dp)
-                    .size(56.dp)
+                    .padding(top = 8.dp)
+                    .size(64.dp)
             ) {
-                Icon(DesktopIcons.ArrowUp, contentDescription = "D-Pad Up", modifier = Modifier.size(32.dp))
+                Icon(DesktopIcons.ArrowUp, contentDescription = "D-Pad Up", modifier = Modifier.size(36.dp))
             }
 
             // DOWN Button
@@ -1152,10 +1152,10 @@ private fun PhoneTvRemoteDpad(
                 },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 12.dp)
-                    .size(56.dp)
+                    .padding(bottom = 8.dp)
+                    .size(64.dp)
             ) {
-                Icon(DesktopIcons.ArrowDown, contentDescription = "D-Pad Down", modifier = Modifier.size(32.dp))
+                Icon(DesktopIcons.ArrowDown, contentDescription = "D-Pad Down", modifier = Modifier.size(36.dp))
             }
 
             // LEFT Button
@@ -1167,10 +1167,10 @@ private fun PhoneTvRemoteDpad(
                 },
                 modifier = Modifier
                     .align(Alignment.CenterStart)
-                    .padding(start = 12.dp)
-                    .size(56.dp)
+                    .padding(start = 8.dp)
+                    .size(64.dp)
             ) {
-                Icon(DesktopIcons.ArrowLeft, contentDescription = "D-Pad Left", modifier = Modifier.size(32.dp))
+                Icon(DesktopIcons.ArrowLeft, contentDescription = "D-Pad Left", modifier = Modifier.size(36.dp))
             }
 
             // RIGHT Button
@@ -1182,10 +1182,10 @@ private fun PhoneTvRemoteDpad(
                 },
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(end = 12.dp)
-                    .size(56.dp)
+                    .padding(end = 8.dp)
+                    .size(64.dp)
             ) {
-                Icon(DesktopIcons.ArrowRight, contentDescription = "D-Pad Right", modifier = Modifier.size(32.dp))
+                Icon(DesktopIcons.ArrowRight, contentDescription = "D-Pad Right", modifier = Modifier.size(36.dp))
             }
 
             // CENTER OK Button

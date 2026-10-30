@@ -55,22 +55,38 @@ class AppLauncher(
         val displayInfo = sessionRepository.activeDisplay.value
         val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
 
-        val intent = Intent(Intent.ACTION_MAIN).apply {
-            addCategory(Intent.CATEGORY_LAUNCHER)
-            component = app.componentName
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
-            if (newInstance) {
-                addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT)
+        val isTvMode = sessionRepository.environmentMode.value == DesktopEnvironmentMode.TV_LEANBACK
+        val bounds = if (isTvMode) {
+            val w = displayInfo?.widthPx ?: 1920
+            val h = displayInfo?.heightPx ?: 1080
+            Rect(0, 0, w, h)
+        } else {
+            computeWindowBounds(
+                packageName = app.packageName,
+                displayInfo = displayInfo,
+                snapMode = snapMode
+            )
+        }
+
+        val baseIntent = appContext.packageManager.getLaunchIntentForPackage(app.packageName)
+        val intent = if (baseIntent != null) {
+            baseIntent.apply {
+                if (newInstance) {
+                    addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT)
+                }
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            }
+        } else {
+            Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                component = app.componentName
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                if (newInstance) {
+                    addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT)
+                }
             }
         }
 
-        val bounds = computeWindowBounds(
-            packageName = app.packageName,
-            displayInfo = displayInfo,
-            snapMode = snapMode
-        )
-
-        val isTvMode = sessionRepository.environmentMode.value == DesktopEnvironmentMode.TV_LEANBACK
         val optionsBundle = buildLaunchActivityOptions(
             targetDisplayId = targetDisplayId,
             isTvMode = isTvMode,
@@ -79,15 +95,15 @@ class AppLauncher(
 
         val dispatcherContext = launchContext ?: appContext
         val a11y = DesktopPointerAccessibilityService.instance
-        return runCatching {
-            dispatcherContext.startActivity(intent, optionsBundle)
+
+        fun recordLaunch() {
             if (targetDisplayId != Display.DEFAULT_DISPLAY) {
                 if (isTvMode) {
                     sessionRepository.recordWindowLaunched(
                         packageName = app.packageName,
                         activityName = app.activityName,
                         label = app.label,
-                        bounds = Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080),
+                        bounds = bounds,
                         snapMode = WindowSnapMode.MAXIMIZED,
                         displayId = targetDisplayId
                     )
@@ -105,15 +121,38 @@ class AppLauncher(
                     )
                 }
             }
+        }
+
+        return runCatching {
+            dispatcherContext.startActivity(intent, optionsBundle)
+            recordLaunch()
             true
         }.recoverCatching { err ->
             Log.w(TAG, "dispatcherContext.startActivity failed, trying AccessibilityService...", err)
             if (a11y != null) {
                 a11y.startActivity(intent, optionsBundle)
+                recordLaunch()
                 true
             } else {
                 throw err
             }
+        }.recoverCatching { err ->
+            Log.w(TAG, "Options launch failed, retrying with basic display options...", err)
+            val basicOptions = ActivityOptions.makeBasic().apply {
+                setLaunchDisplayId(targetDisplayId)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    setPendingIntentBackgroundActivityStartMode(
+                        ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                    )
+                }
+            }.toBundle()
+            dispatcherContext.startActivity(intent, basicOptions)
+            recordLaunch()
+            true
+        }.recoverCatching { err ->
+            Log.w(TAG, "Display launch failed, retrying standard launch...", err)
+            dispatcherContext.startActivity(intent)
+            true
         }.onFailure { err ->
             Log.e(TAG, "Failed launching ${app.uniqueKey} on display $targetDisplayId", err)
         }.getOrDefault(false)
@@ -476,7 +515,7 @@ class AppLauncher(
     ): Bundle {
         val options = ActivityOptions.makeBasic().apply {
             setLaunchDisplayId(targetDisplayId)
-            if (!isTvMode && launchBounds != null) {
+            if (launchBounds != null) {
                 setLaunchBounds(launchBounds)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -486,15 +525,15 @@ class AppLauncher(
             }
         }
 
-        val targetWindowingMode = if (isTvMode) WINDOWING_MODE_FULLSCREEN else WINDOWING_MODE_FREEFORM
-        if (isTvMode || launchBounds != null) {
+        val targetWindowingMode = WINDOWING_MODE_FREEFORM
+        if (launchBounds != null) {
             runCatching {
                 setLaunchWindowingModeMethod?.invoke(options, targetWindowingMode)
             }
         }
 
         return options.toBundle().apply {
-            if (isTvMode || launchBounds != null) {
+            if (launchBounds != null) {
                 putInt(KEY_LAUNCH_WINDOWING_MODE, targetWindowingMode)
             }
         }

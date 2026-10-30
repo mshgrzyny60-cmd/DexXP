@@ -717,10 +717,8 @@ fun DesktopWorkspaceRoot(
                     )
                 }
 
-                // Leaf-isolated zero-recomposition cursor fallback
-                if (renderInlineCursorFallback) {
-                    InlineDesktopCursorOverlay(pointerFocusBridge = pointerFocusBridge)
-                }
+                // Leaf-isolated zero-recomposition hardware-accelerated cursor
+                InlineDesktopCursorOverlay(pointerFocusBridge = pointerFocusBridge)
             }
         }
     }

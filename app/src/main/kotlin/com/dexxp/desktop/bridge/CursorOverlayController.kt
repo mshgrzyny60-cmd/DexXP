@@ -43,7 +43,6 @@ class CursorOverlayController(
     private var containerView: FrameLayout? = null
     private var dimmerView: View? = null
     private var snapHudView: SnapZoneHudView? = null
-    private var spriteView: CursorSpriteView? = null
     private var scope: CoroutineScope? = null
 
     val isAttached: Boolean
@@ -90,19 +89,12 @@ class CursorOverlayController(
         }
 
         val wm = windowContext.getSystemService(WindowManager::class.java) ?: return false
-        val density = windowContext.resources.displayMetrics.density
-        val spriteSizePx = (36f * density).roundToInt().coerceAtLeast(36)
-
         val dimmer = View(windowContext).apply {
             setBackgroundColor(Color.BLACK)
             alpha = 0f
             visibility = View.GONE
         }
         val snapHud = SnapZoneHudView(windowContext).apply {
-            visibility = View.GONE
-        }
-        val sprite = CursorSpriteView(windowContext).apply {
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
             visibility = View.GONE
         }
 
@@ -123,7 +115,6 @@ class CursorOverlayController(
                     FrameLayout.LayoutParams.MATCH_PARENT
                 )
             )
-            addView(sprite, FrameLayout.LayoutParams(spriteSizePx, spriteSizePx))
         }
 
         val params = WindowManager.LayoutParams(
@@ -154,19 +145,10 @@ class CursorOverlayController(
         containerView = root
         dimmerView = dimmer
         snapHudView = snapHud
-        spriteView = sprite
 
         val coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         scope = coroutineScope
 
-        coroutineScope.launch {
-            combine(
-                pointerFocusBridge.pointerState,
-                sessionRepository.environmentMode
-            ) { state, envMode ->
-                updateCursorSprite(state, envMode)
-            }.collect()
-        }
         coroutineScope.launch {
             sessionRepository.snapPreview.collect { updateSnapPreview(it) }
         }
@@ -174,22 +156,6 @@ class CursorOverlayController(
             sessionRepository.externalBrightnessFraction.collect { updateBrightnessDimmer(it) }
         }
         return true
-    }
-
-    private fun updateCursorSprite(state: PointerState, envMode: DesktopEnvironmentMode) {
-        val sprite = spriteView ?: return
-        if (envMode == DesktopEnvironmentMode.TV_LEANBACK) {
-            sprite.visibility = View.GONE
-            return
-        }
-        sprite.visibility = if (state.visible) View.VISIBLE else View.INVISIBLE
-        sprite.translationX = state.x
-        sprite.translationY = state.y
-        sprite.updateButtonVisuals(
-            primaryDown = state.isPrimaryDown,
-            secondaryDown = state.isSecondaryDown,
-            dragging = state.isDragging
-        )
     }
 
     private fun updateSnapPreview(preview: SnapPreviewState?) {
@@ -225,7 +191,6 @@ class CursorOverlayController(
         containerView = null
         dimmerView = null
         snapHudView = null
-        spriteView = null
         overlayWindowManager = null
     }
 
@@ -283,61 +248,6 @@ class CursorOverlayController(
                 canvas.drawRoundRect(pillRect, 16f * d, 16f * d, pillPaint)
                 canvas.drawText(labelText, cx, cy + 4.5f * d, textPaint)
             }
-        }
-    }
-
-    private class CursorSpriteView(context: Context) : View(context) {
-        private var isPrimary = false
-        private var isSecondary = false
-        private var isDragging = false
-
-        private val d = context.resources.displayMetrics.density
-        private val cursorPath = Path().apply {
-            moveTo(1.5f * d, 1.5f * d)
-            lineTo(1.5f * d, 21.5f * d)
-            lineTo(6.8f * d, 16.6f * d)
-            lineTo(10.5f * d, 24.2f * d)
-            lineTo(13.6f * d, 22.8f * d)
-            lineTo(9.8f * d, 15.2f * d)
-            lineTo(16.8f * d, 15.2f * d)
-            close()
-        }
-
-        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL
-            color = 0xFF111622.toInt()
-        }
-
-        private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 1.8f * d
-            strokeJoin = Paint.Join.ROUND
-            color = Color.WHITE
-        }
-
-        private val haloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 2.2f * d
-            color = 0xFF8AB4F8.toInt()
-        }
-
-        fun updateButtonVisuals(primaryDown: Boolean, secondaryDown: Boolean, dragging: Boolean) {
-            if (isPrimary != primaryDown || isSecondary != secondaryDown || isDragging != dragging) {
-                isPrimary = primaryDown
-                isSecondary = secondaryDown
-                isDragging = dragging
-                invalidate()
-            }
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            if (isPrimary || isSecondary || isDragging) {
-                haloPaint.color = if (isSecondary) 0xFF7FD0E6.toInt() else 0xFF8AB4F8.toInt()
-                canvas.drawCircle(5f * d, 5f * d, 9.5f * d, haloPaint)
-            }
-            canvas.drawPath(cursorPath, fillPaint)
-            canvas.drawPath(cursorPath, strokePaint)
         }
     }
 

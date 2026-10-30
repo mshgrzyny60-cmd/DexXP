@@ -41,6 +41,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -89,20 +90,23 @@ fun TvLeanbackWorkspaceRoot(
 
     val context = LocalContext.current
     var focusedAppIndex by remember { mutableIntStateOf(0) }
+    var isCategoryRailFocused by remember { mutableStateOf(false) }
     val gridState = rememberLazyGridState()
+    val numColumns = 5
 
     var selectedCategoryIndex by remember { mutableIntStateOf(0) }
     val categories = remember {
         listOf("🌟 Favorites & Recents", "🎬 Media & Streaming", "🎮 Games & Tools", "📱 All Applications")
     }
 
-    // Filter apps based on category
+    // Filter apps based on category with abundant apps to browse
     val displayedApps by remember(installedApps, pinnedPackages, selectedCategoryIndex) {
         derivedStateOf {
             when (selectedCategoryIndex) {
                 0 -> {
                     val pinned = installedApps.filter { it.packageName in pinnedPackages }
-                    if (pinned.isNotEmpty()) pinned else installedApps.take(12)
+                    val others = installedApps.filterNot { it.packageName in pinnedPackages }
+                    (pinned + others.take(25)).ifEmpty { installedApps.take(25) }
                 }
                 1 -> {
                     val media = installedApps.filter { it.category == AppCategory.MEDIA }
@@ -112,14 +116,14 @@ fun TvLeanbackWorkspaceRoot(
                             app.packageName.contains("spotify", ignoreCase = true) ||
                             app.packageName.contains("vlc", ignoreCase = true) ||
                             app.packageName.contains("media", ignoreCase = true)
-                    }.ifEmpty { installedApps.take(12) }
+                    }.ifEmpty { installedApps.take(25) }
                 }
                 2 -> {
                     val tools = installedApps.filter {
                         it.category == AppCategory.GAMES ||
                             it.category == AppCategory.SYSTEM_UTILITIES
                     }
-                    if (tools.isNotEmpty()) tools else installedApps.take(12)
+                    if (tools.isNotEmpty()) tools else installedApps.take(25)
                 }
                 else -> installedApps
             }
@@ -135,34 +139,72 @@ fun TvLeanbackWorkspaceRoot(
     LaunchedEffect(Unit) {
         sessionRepository.tvNavigationEvents.collect { action ->
             val appCount = displayedApps.size
-            if (appCount == 0) return@collect
-            when (action) {
-                TvNavigationAction.LEFT -> {
-                    focusedAppIndex = (focusedAppIndex - 1).coerceAtLeast(0)
-                    gridState.animateScrollToItem(focusedAppIndex)
-                }
-                TvNavigationAction.RIGHT -> {
-                    focusedAppIndex = (focusedAppIndex + 1).coerceAtMost(appCount - 1)
-                    gridState.animateScrollToItem(focusedAppIndex)
-                }
-                TvNavigationAction.UP -> {
-                    focusedAppIndex = (focusedAppIndex - 5).coerceAtLeast(0)
-                    gridState.animateScrollToItem(focusedAppIndex)
-                }
-                TvNavigationAction.DOWN -> {
-                    focusedAppIndex = (focusedAppIndex + 5).coerceAtMost(appCount - 1)
-                    gridState.animateScrollToItem(focusedAppIndex)
-                }
-                TvNavigationAction.SELECT -> {
-                    if (focusedAppIndex in displayedApps.indices) {
-                        appLauncher.launchApp(displayedApps[focusedAppIndex], launchContext = context)
-                    }
-                }
-                TvNavigationAction.BACK -> {
-                    if (selectedCategoryIndex != 0) {
-                        selectedCategoryIndex = 0
+            if (isCategoryRailFocused) {
+                when (action) {
+                    TvNavigationAction.LEFT -> {
+                        selectedCategoryIndex = (selectedCategoryIndex - 1).coerceAtLeast(0)
                         focusedAppIndex = 0
                         gridState.animateScrollToItem(0)
+                    }
+                    TvNavigationAction.RIGHT -> {
+                        selectedCategoryIndex = (selectedCategoryIndex + 1).coerceAtMost(categories.size - 1)
+                        focusedAppIndex = 0
+                        gridState.animateScrollToItem(0)
+                    }
+                    TvNavigationAction.DOWN -> {
+                        isCategoryRailFocused = false
+                        focusedAppIndex = 0
+                    }
+                    TvNavigationAction.SELECT -> {
+                        isCategoryRailFocused = false
+                        focusedAppIndex = 0
+                    }
+                    TvNavigationAction.UP, TvNavigationAction.BACK -> {
+                        // Keep focus in category rail
+                    }
+                }
+            } else {
+                if (appCount == 0) {
+                    isCategoryRailFocused = true
+                    return@collect
+                }
+                when (action) {
+                    TvNavigationAction.LEFT -> {
+                        if (focusedAppIndex > 0) {
+                            focusedAppIndex--
+                            gridState.animateScrollToItem(focusedAppIndex)
+                        }
+                    }
+                    TvNavigationAction.RIGHT -> {
+                        if (focusedAppIndex < appCount - 1) {
+                            focusedAppIndex++
+                            gridState.animateScrollToItem(focusedAppIndex)
+                        }
+                    }
+                    TvNavigationAction.UP -> {
+                        if (focusedAppIndex < numColumns) {
+                            isCategoryRailFocused = true
+                        } else {
+                            focusedAppIndex = (focusedAppIndex - numColumns).coerceAtLeast(0)
+                            gridState.animateScrollToItem(focusedAppIndex)
+                        }
+                    }
+                    TvNavigationAction.DOWN -> {
+                        if (focusedAppIndex + numColumns < appCount) {
+                            focusedAppIndex += numColumns
+                            gridState.animateScrollToItem(focusedAppIndex)
+                        } else if (focusedAppIndex < appCount - 1) {
+                            focusedAppIndex = appCount - 1
+                            gridState.animateScrollToItem(focusedAppIndex)
+                        }
+                    }
+                    TvNavigationAction.SELECT -> {
+                        if (focusedAppIndex in displayedApps.indices) {
+                            appLauncher.launchApp(displayedApps[focusedAppIndex], launchContext = context)
+                        }
+                    }
+                    TvNavigationAction.BACK -> {
+                        isCategoryRailFocused = true
                     }
                 }
             }
@@ -214,12 +256,17 @@ fun TvLeanbackWorkspaceRoot(
             ) {
                 items(categories.size) { index ->
                     val isSelected = selectedCategoryIndex == index
+                    val isRailActive = isCategoryRailFocused && isSelected
                     val interactionSource = remember { MutableInteractionSource() }
                     val isFocused by interactionSource.collectIsFocusedAsState()
 
                     FilterChip(
                         selected = isSelected,
-                        onClick = { selectedCategoryIndex = index },
+                        onClick = {
+                            selectedCategoryIndex = index
+                            isCategoryRailFocused = false
+                            focusedAppIndex = 0
+                        },
                         label = {
                             Text(
                                 text = categories[index],
@@ -236,10 +283,10 @@ fun TvLeanbackWorkspaceRoot(
                         ),
                         interactionSource = interactionSource,
                         modifier = Modifier
-                            .scale(if (isFocused) 1.08f else 1f)
+                            .scale(if (isRailActive || isFocused) 1.08f else 1f)
                             .border(
-                                width = if (isFocused) 2.dp else 0.dp,
-                                color = if (isFocused) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                width = if (isRailActive) 3.dp else if (isFocused) 2.dp else 0.dp,
+                                color = if (isRailActive || isFocused) MaterialTheme.colorScheme.primary else Color.Transparent,
                                 shape = RoundedCornerShape(50)
                             )
                     )
@@ -249,7 +296,7 @@ fun TvLeanbackWorkspaceRoot(
             // Big 10-Foot App Grid
             LazyVerticalGrid(
                 state = gridState,
-                columns = GridCells.Adaptive(minSize = 180.dp),
+                columns = GridCells.Fixed(numColumns),
                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
                 modifier = Modifier
@@ -264,8 +311,9 @@ fun TvLeanbackWorkspaceRoot(
                     val app = displayedApps[idx]
                     TvAppCard(
                         app = app,
-                        isExternalFocused = (idx == focusedAppIndex),
+                        isExternalFocused = (!isCategoryRailFocused && idx == focusedAppIndex),
                         onLaunch = {
+                            isCategoryRailFocused = false
                             focusedAppIndex = idx
                             appLauncher.launchApp(app, launchContext = context)
                         }
