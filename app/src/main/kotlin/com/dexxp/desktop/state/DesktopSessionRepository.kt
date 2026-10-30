@@ -403,6 +403,14 @@ class DesktopSessionRepository(context: Context) {
         _isShowDesktopActive.value = show
     }
 
+    fun minimizeAllWindows() {
+        _runningWindows.update { list ->
+            list.map { it.copy(isMinimized = true, isFocused = false) }
+        }
+        _isShowDesktopActive.value = true
+        _externalAppVisibleOnDisplay.value = false
+    }
+
     fun recordWindowLaunched(
         packageName: String,
         activityName: String,

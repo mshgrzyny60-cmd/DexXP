@@ -187,20 +187,21 @@ class DesktopWindowPresentation(
                 keyboardManager.altTabState
             ) { mode, needsKeyboard, envMode, altTab ->
                 val isTv = envMode == DesktopEnvironmentMode.TV_LEANBACK
-                val effectiveMode = if (altTab.isVisible) {
-                    ShellSurfaceMode.FLYOUT_ACTIVE
-                } else if (isTv) {
-                    ShellSurfaceMode.FULL_DESKTOP
-                } else {
-                    mode
+                val hasActiveApp = mode == ShellSurfaceMode.DOCKED_TASKBAR
+                val effectiveMode: ShellSurfaceMode = when {
+                    altTab.isVisible -> ShellSurfaceMode.FLYOUT_ACTIVE
+                    isTv && hasActiveApp -> ShellSurfaceMode.DOCKED_TASKBAR
+                    isTv -> ShellSurfaceMode.FULL_DESKTOP
+                    else -> mode
                 }
-                Triple(effectiveMode, needsKeyboard, isTv)
-            }.collect { (mode, needsKeyboard, isTv) ->
+                val effectiveNeedsKeyboard: Boolean = if (isTv) !hasActiveApp else needsKeyboard
+                Triple(effectiveMode, effectiveNeedsKeyboard, isTv)
+            }.collect { (mode: ShellSurfaceMode, needsKeyboard: Boolean, isTv: Boolean) ->
                 currentSurfaceMode = mode
                 pointerFocusBridge.applyPresentationWindowPolicy(
                     window = win,
                     mode = mode,
-                    needsKeyboardFocus = needsKeyboard || isTv,
+                    needsKeyboardFocus = needsKeyboard,
                     displayWidthPx = displayWidthPx,
                     displayHeightPx = displayHeightPx,
                     densityDpi = scaledDensityDpi

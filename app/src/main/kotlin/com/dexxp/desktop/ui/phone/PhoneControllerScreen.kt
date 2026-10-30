@@ -327,15 +327,20 @@ fun PhoneControllerScreen(
                         sessionRepository = sessionRepository,
                         pointerFocusBridge = pointerFocusBridge,
                         onBack = {
-                            sessionRepository.sendTvNavigation(TvNavigationAction.BACK)
+                            val hasActiveApp = sessionRepository.runningWindows.value.any { !it.isMinimized }
                             val handled = DesktopPointerAccessibilityService.instance?.performGlobalAction(
                                 AccessibilityService.GLOBAL_ACTION_BACK
                             ) ?: false
                             if (!handled) {
                                 pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_BACK)
                             }
+                            if (!hasActiveApp) {
+                                sessionRepository.sendTvNavigation(TvNavigationAction.BACK)
+                            }
                         },
                         onHome = {
+                            sessionRepository.setShowDesktop(true)
+                            sessionRepository.minimizeAllWindows()
                             val handled = DesktopPointerAccessibilityService.instance?.performGlobalAction(
                                 AccessibilityService.GLOBAL_ACTION_HOME
                             ) ?: false

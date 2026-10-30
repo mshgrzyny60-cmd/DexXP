@@ -191,13 +191,22 @@ class PointerFocusBridge(
         val density = densityDpi / 160f
         val taskbarHeightPx = (AppLauncher.TASKBAR_HEIGHT_DP * density).roundToInt()
 
-        val targetWidth = WindowManager.LayoutParams.MATCH_PARENT
-        val targetHeight = when (mode) {
-            ShellSurfaceMode.DOCKED_TASKBAR -> taskbarHeightPx
-            ShellSurfaceMode.FULL_DESKTOP,
-            ShellSurfaceMode.FLYOUT_ACTIVE -> WindowManager.LayoutParams.MATCH_PARENT
+        val isTvMode = sessionRepository.environmentMode.value == DesktopEnvironmentMode.TV_LEANBACK
+        val hasActiveApp = sessionRepository.runningWindows.value.any { !it.isMinimized } &&
+            !sessionRepository.isShowDesktopActive.value
+
+        val (targetWidth, targetHeight, targetGravity) = when {
+            isTvMode && hasActiveApp -> {
+                // When an app is active on TV, hide presentation dialog so the app takes 100% of the screen
+                Triple(0, 0, Gravity.TOP or Gravity.START)
+            }
+            mode == ShellSurfaceMode.DOCKED_TASKBAR -> {
+                Triple(WindowManager.LayoutParams.MATCH_PARENT, taskbarHeightPx, Gravity.BOTTOM or Gravity.START)
+            }
+            else -> {
+                Triple(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, Gravity.BOTTOM or Gravity.START)
+            }
         }
-        val targetGravity = Gravity.BOTTOM or Gravity.START
 
         // Capture prior attributes BEFORE in-place mutation (`window.attributes` returns live mWindowAttributes)
         val prevWidth = lp.width
@@ -213,12 +222,22 @@ class PointerFocusBridge(
             WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
         flags = flags and WindowManager.LayoutParams.FLAG_DIM_BEHIND.inv()
 
-        val isTvMode = sessionRepository.environmentMode.value == DesktopEnvironmentMode.TV_LEANBACK
-        val shouldBeFocusable = isTvMode || (needsKeyboardFocus && mode != ShellSurfaceMode.DOCKED_TASKBAR)
+        val shouldBeFocusable = when {
+            isTvMode && hasActiveApp -> false
+            isTvMode -> true
+            mode == ShellSurfaceMode.DOCKED_TASKBAR -> false
+            else -> needsKeyboardFocus
+        }
         flags = if (shouldBeFocusable) {
             flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
         } else {
             flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        }
+
+        if (isTvMode && hasActiveApp) {
+            decorView.visibility = View.GONE
+        } else {
+            decorView.visibility = View.VISIBLE
         }
 
         val layoutChanged = prevWidth != targetWidth ||
