@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
+import android.provider.Settings
 import android.view.Display
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -280,13 +281,18 @@ class DesktopWindowPresentation(
     private fun computeCurrentScreenBounds(): Rect {
         return if (currentSurfaceMode == ShellSurfaceMode.DOCKED_TASKBAR) {
             val taskbarPx = computeTaskbarHeightPx()
-            Rect(0, (displayHeightPx - taskbarPx).coerceAtLeast(0), displayWidthPx, displayHeightPx)
+            Rect(0, (displayHeightPx - taskbarPx).coerceAtLeast(0), displayWidthPx, maxOf(displayHeightPx, 1080) + 100)
         } else {
             Rect(0, 0, displayWidthPx, displayHeightPx)
         }
     }
 
     private fun configureExternalWindow(win: Window) {
+        runCatching {
+            if (Settings.canDrawOverlays(context)) {
+                win.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+            }
+        }
         win.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         win.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
         win.addFlags(

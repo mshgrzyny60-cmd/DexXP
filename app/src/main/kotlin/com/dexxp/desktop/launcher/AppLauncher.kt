@@ -58,6 +58,39 @@ class AppLauncher(
         newInstance: Boolean = false,
         launchContext: Context? = null
     ): Boolean {
+        if (app.packageName == "com.lemon.lvoverseas" || app.packageName == "com.capcut.editor") {
+            return launchCapCutDesktopStudio(snapMode, launchContext)
+        }
+        return launchAppInternal(app, snapMode, newInstance, launchContext)
+    }
+
+    fun launchCapCutDesktopStudio(
+        snapMode: WindowSnapMode = WindowSnapMode.MAXIMIZED,
+        launchContext: Context? = null
+    ): Boolean {
+        val displayInfo = sessionRepository.activeDisplay.value
+        val intent = Intent(appContext, com.dexxp.desktop.browser.DesktopWebActivity::class.java).apply {
+            putExtra(com.dexxp.desktop.browser.DesktopWebActivity.EXTRA_URL, "https://www.capcut.com/editor")
+            putExtra(com.dexxp.desktop.browser.DesktopWebActivity.EXTRA_TITLE, "CapCut Desktop Studio")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+        }
+        val bounds = Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+        return launchCustomIntentInFreeform(
+            intent = intent,
+            recordPackageKey = "dexxp.webapp.capcut_web",
+            label = "CapCut Desktop Studio",
+            customBounds = bounds,
+            snapMode = snapMode,
+            launchContext = launchContext
+        )
+    }
+
+    private fun launchAppInternal(
+        app: DesktopAppItem,
+        snapMode: WindowSnapMode = WindowSnapMode.MAXIMIZED,
+        newInstance: Boolean = false,
+        launchContext: Context? = null
+    ): Boolean {
         val isTv = sessionRepository.environmentMode.value == DesktopEnvironmentMode.TV_LEANBACK
         if (isTv) {
             // Keep TV presentation visible with loading indicator during cold launch
@@ -177,6 +210,17 @@ class AppLauncher(
         snapMode: WindowSnapMode? = null,
         launchContext: Context? = null
     ): Boolean {
+        if (packageName == "com.lemon.lvoverseas" || packageName == "com.capcut.editor" || packageName == "dexxp.webapp.capcut_web") {
+            val existing = sessionRepository.runningWindows.value.firstOrNull {
+                it.packageName == "dexxp.webapp.capcut_web" || it.packageName == "com.lemon.lvoverseas" || it.packageName == "com.capcut.editor"
+            }
+            if (existing != null && !existing.isMinimized) {
+                sessionRepository.markWindowFocused(existing.packageName)
+                return true
+            }
+            return launchCapCutDesktopStudio(snapMode ?: WindowSnapMode.MAXIMIZED, launchContext)
+        }
+
         val item = appRepository.findByPackage(packageName)
         if (item != null) {
             val effectiveSnap = snapMode

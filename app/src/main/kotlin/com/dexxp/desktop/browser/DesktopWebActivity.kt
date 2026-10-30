@@ -54,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -303,6 +304,37 @@ private fun DesktopWebScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        val isCapCut = currentUrl.contains("capcut") || currentTitle.contains("CapCut", ignoreCase = true)
+                        if (isCapCut) {
+                            val localCtx = LocalContext.current
+                            Surface(
+                                onClick = {
+                                    val pm = localCtx.packageManager
+                                    val nativeIntent = pm.getLaunchIntentForPackage("com.lemon.lvoverseas")
+                                        ?: pm.getLaunchIntentForPackage("com.capcut.editor")
+                                    if (nativeIntent != null) {
+                                        nativeIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        localCtx.startActivity(nativeIntent)
+                                    }
+                                },
+                                shape = RoundedCornerShape(50),
+                                color = MaterialTheme.colorScheme.secondaryContainer,
+                                modifier = Modifier.height(28.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Mobile App",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                }
+                            }
+                        }
+
                         Surface(
                             shape = RoundedCornerShape(50),
                             color = MaterialTheme.colorScheme.primaryContainer,
