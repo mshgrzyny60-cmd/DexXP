@@ -220,6 +220,15 @@ class DesktopWindowPresentation(
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.source and InputDevice.SOURCE_CLASS_POINTER != 0) {
+            val isDown = ev.actionMasked == MotionEvent.ACTION_DOWN || ev.actionMasked == MotionEvent.ACTION_MOVE
+            val screenY = if (currentSurfaceMode == ShellSurfaceMode.DOCKED_TASKBAR) {
+                (displayHeightPx - computeTaskbarHeightPx()).coerceAtLeast(0) + ev.y
+            } else {
+                ev.y
+            }
+            pointerFocusBridge.setPointerPosition(ev.x, screenY, isDown, sourceDisplayId = display.displayId)
+        }
         if (ev.actionMasked == MotionEvent.ACTION_OUTSIDE) {
             pointerFocusBridge.onOutsideWindowTouch()
             return false
@@ -230,7 +239,12 @@ class DesktopWindowPresentation(
     override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
         if (ev.source and InputDevice.SOURCE_CLASS_POINTER != 0) {
             val isDown = (ev.buttonState and MotionEvent.BUTTON_PRIMARY) != 0
-            pointerFocusBridge.setPointerPosition(ev.x, ev.y, isDown, sourceDisplayId = display.displayId)
+            val screenY = if (currentSurfaceMode == ShellSurfaceMode.DOCKED_TASKBAR) {
+                (displayHeightPx - computeTaskbarHeightPx()).coerceAtLeast(0) + ev.y
+            } else {
+                ev.y
+            }
+            pointerFocusBridge.setPointerPosition(ev.x, screenY, isDown, sourceDisplayId = display.displayId)
         }
         return super.dispatchGenericMotionEvent(ev)
     }
@@ -253,10 +267,14 @@ class DesktopWindowPresentation(
         super.onStop()
     }
 
+    private fun computeTaskbarHeightPx(): Int {
+        val density = scaledDensityDpi / 160f
+        return (AppLauncher.TASKBAR_HEIGHT_DP * density).roundToInt()
+    }
+
     private fun computeCurrentScreenBounds(): Rect {
         return if (currentSurfaceMode == ShellSurfaceMode.DOCKED_TASKBAR) {
-            val density = scaledDensityDpi / 160f
-            val taskbarPx = (AppLauncher.TASKBAR_HEIGHT_DP * density).roundToInt()
+            val taskbarPx = computeTaskbarHeightPx()
             Rect(0, (displayHeightPx - taskbarPx).coerceAtLeast(0), displayWidthPx, displayHeightPx)
         } else {
             Rect(0, 0, displayWidthPx, displayHeightPx)

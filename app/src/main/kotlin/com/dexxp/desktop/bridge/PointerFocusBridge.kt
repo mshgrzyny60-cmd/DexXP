@@ -220,10 +220,20 @@ class PointerFocusBridge(
         var flags = prevFlags
         flags = flags or
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-            WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
         flags = flags and WindowManager.LayoutParams.FLAG_DIM_BEHIND.inv()
+
+        if (mode == ShellSurfaceMode.DOCKED_TASKBAR) {
+            // When docked to the bottom as a taskbar, remove FLAG_LAYOUT_IN_SCREEN so WindowManager aligns
+            // the window's touchable input bounds to Gravity.BOTTOM (displayHeight - taskbarHeightPx).
+            // FLAG_LAYOUT_IN_SCREEN forces touch hit-testing to (0, 0), which makes bottom mouse clicks
+            // drop through to background apps as ACTION_OUTSIDE.
+            flags = flags and WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN.inv()
+            flags = flags and WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH.inv()
+        } else {
+            flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            flags = flags or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+        }
 
         val shouldBeFocusable = when {
             isTvMode && hasActiveApp -> false
