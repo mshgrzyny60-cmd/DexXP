@@ -84,6 +84,13 @@ class DesktopBrowserLauncher(
             subtitle = "Split-Pane Inbox",
             desktopUrl = "https://mail.google.com/mail/u/0/#inbox",
             accentColorHex = 0xFF8AB4F8
+        ),
+        DesktopWebAppDefinition(
+            id = "capcut_web",
+            title = "CapCut Web Studio",
+            subtitle = "Widescreen Desktop Editor",
+            desktopUrl = "https://www.capcut.com/editor",
+            accentColorHex = 0xFF00C4CC
         )
     )
 

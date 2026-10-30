@@ -201,7 +201,7 @@ class DesktopWindowPresentation(
                     isTv -> ShellSurfaceMode.FULL_DESKTOP
                     else -> mode
                 }
-                val effectiveNeedsKeyboard: Boolean = if (isTv) !hasActiveApp else needsKeyboard
+                val effectiveNeedsKeyboard: Boolean = if (isTv) !hasActiveApp else (needsKeyboard || effectiveMode == ShellSurfaceMode.FLYOUT_ACTIVE)
                 Triple(effectiveMode, effectiveNeedsKeyboard, isTv)
             }.collect { (mode: ShellSurfaceMode, needsKeyboard: Boolean, isTv: Boolean) ->
                 currentSurfaceMode = mode

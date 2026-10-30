@@ -246,12 +246,14 @@ class DesktopSessionRepository(context: Context) {
         val next = !_isStartMenuOpen.value
         dismissFlyouts()
         _isStartMenuOpen.value = next
+        _isSearchFieldFocused.value = next
     }
 
     fun setStartMenuOpen(open: Boolean) {
         if (open) {
             dismissFlyouts()
             _isStartMenuOpen.value = true
+            _isSearchFieldFocused.value = true
         } else {
             _isStartMenuOpen.value = false
             _isSearchFieldFocused.value = false

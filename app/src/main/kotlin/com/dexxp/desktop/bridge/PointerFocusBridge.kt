@@ -239,6 +239,7 @@ class PointerFocusBridge(
             isTvMode && hasActiveApp -> false
             isTvMode -> true
             mode == ShellSurfaceMode.DOCKED_TASKBAR -> false
+            mode == ShellSurfaceMode.FLYOUT_ACTIVE -> true
             else -> needsKeyboardFocus
         }
         flags = if (shouldBeFocusable) {
