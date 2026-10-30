@@ -45,6 +45,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -53,9 +54,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
@@ -92,28 +95,30 @@ class DesktopWebActivity : ComponentActivity() {
         val appTitle = intent.getStringExtra(EXTRA_TITLE) ?: "Desktop Web"
 
         setContent {
-            DexXPTheme(allowDynamicColorOnPhone = false) {
-                DesktopWebScreen(
-                    initialUrl = targetUrl,
-                    appTitle = appTitle,
-                    onInitWebView = { wv ->
-                        webView = wv
-                        configureDesktopWebSettings(wv)
-                    },
-                    onRegisterCustomVideoHandlers = { onHide ->
-                        onHideCustomVideoAction = onHide
-                    },
-                    onCustomVideoShown = { view, callback ->
-                        customVideoView = view
-                        customViewCallback = callback
-                    },
-                    onCustomVideoHidden = {
-                        customVideoView = null
-                        customViewCallback?.onCustomViewHidden()
-                        customViewCallback = null
-                    },
-                    onClose = { finish() }
-                )
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                DexXPTheme(allowDynamicColorOnPhone = false) {
+                    DesktopWebScreen(
+                        initialUrl = targetUrl,
+                        appTitle = appTitle,
+                        onInitWebView = { wv ->
+                            webView = wv
+                            configureDesktopWebSettings(wv)
+                        },
+                        onRegisterCustomVideoHandlers = { onHide ->
+                            onHideCustomVideoAction = onHide
+                        },
+                        onCustomVideoShown = { view, callback ->
+                            customVideoView = view
+                            customViewCallback = callback
+                        },
+                        onCustomVideoHidden = {
+                            customVideoView = null
+                            customViewCallback?.onCustomViewHidden()
+                            customViewCallback = null
+                        },
+                        onClose = { finish() }
+                    )
+                }
             }
         }
     }

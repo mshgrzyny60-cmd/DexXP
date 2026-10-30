@@ -521,13 +521,12 @@ class DesktopSessionRepository(context: Context) {
         _externalAppVisibleOnDisplay.value = hasVisibleExternalApp
         val env = _environmentMode.value
 
-        if (!hasVisibleExternalApp) {
-            // When no active apps are visible on display, immediately return to full desktop wallpaper & icons
+        val hasUnminimizedWindows = _runningWindows.value.any { !it.isMinimized }
+
+        if (!hasVisibleExternalApp && !hasUnminimizedWindows) {
+            // Only restore full desktop wallpaper if there are truly no active or unminimized windows
             _isShowDesktopActive.value = true
-            _runningWindows.update { list ->
-                list.map { it.copy(isMinimized = true, isFocused = false) }
-            }
-        } else {
+        } else if (hasVisibleExternalApp) {
             val launching = _launchingPackage.value
             if (launching != null && (focusedPackage == launching || detectedPackages.contains(launching))) {
                 _launchingPackage.value = null

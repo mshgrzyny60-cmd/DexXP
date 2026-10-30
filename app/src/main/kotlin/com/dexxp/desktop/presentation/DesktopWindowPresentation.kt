@@ -12,8 +12,11 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Window
 import android.view.WindowManager
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -132,27 +135,29 @@ class DesktopWindowPresentation(
             setViewTreeSavedStateRegistryOwner(this@DesktopWindowPresentation)
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             setContent {
-                DexXPTheme(allowDynamicColorOnPhone = false) {
-                    DesktopWorkspaceRoot(
-                        sessionRepository = sessionRepository,
-                        appRepository = appRepository,
-                        appLauncher = appLauncher,
-                        pointerFocusBridge = pointerFocusBridge,
-                        audioRouteManager = audioRouteManager,
-                        desktopFileManager = desktopFileManager,
-                        phoneScreenPowerController = phoneScreenPowerController,
-                        clipboardManager = clipboardManager,
-                        virtualWorkspaceManager = virtualWorkspaceManager,
-                        desktopBrowserLauncher = desktopBrowserLauncher,
-                        presetManager = presetManager,
-                        terminalLauncher = terminalLauncher,
-                        commandPaletteController = commandPaletteController,
-                        missionControlController = missionControlController,
-                        phoneHubController = phoneHubController,
-                        keyboardManager = keyboardManager,
-                        renderInlineCursorFallback = !hasHardwareCursorOverlay(),
-                        isBackdropOnly = false
-                    )
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    DexXPTheme(allowDynamicColorOnPhone = false) {
+                        DesktopWorkspaceRoot(
+                            sessionRepository = sessionRepository,
+                            appRepository = appRepository,
+                            appLauncher = appLauncher,
+                            pointerFocusBridge = pointerFocusBridge,
+                            audioRouteManager = audioRouteManager,
+                            desktopFileManager = desktopFileManager,
+                            phoneScreenPowerController = phoneScreenPowerController,
+                            clipboardManager = clipboardManager,
+                            virtualWorkspaceManager = virtualWorkspaceManager,
+                            desktopBrowserLauncher = desktopBrowserLauncher,
+                            presetManager = presetManager,
+                            terminalLauncher = terminalLauncher,
+                            commandPaletteController = commandPaletteController,
+                            missionControlController = missionControlController,
+                            phoneHubController = phoneHubController,
+                            keyboardManager = keyboardManager,
+                            renderInlineCursorFallback = !hasHardwareCursorOverlay(),
+                            isBackdropOnly = false
+                        )
+                    }
                 }
             }
         }

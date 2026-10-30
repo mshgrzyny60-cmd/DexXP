@@ -114,7 +114,13 @@ class DesktopPointerAccessibilityService : AccessibilityService() {
         for (win in displayWindows) {
             if (win.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
             val rootPkg = runCatching { win.root?.packageName?.toString() }.getOrNull() ?: continue
-            if (rootPkg == selfPkg || rootPkg == "com.android.systemui") continue
+            if (rootPkg == "com.android.systemui") continue
+            if (rootPkg == selfPkg) {
+                val hasRunningWebApp = app.sessionRepository.runningWindows.value.any {
+                    it.packageName.startsWith("dexxp.webapp") && !it.isMinimized
+                }
+                if (!hasRunningWebApp) continue
+            }
 
             val rect = Rect()
             win.getBoundsInScreen(rect)
