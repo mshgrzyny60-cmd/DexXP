@@ -993,9 +993,9 @@ private fun SystemAndAdbSetupPane(
             }
         }
 
-        // scrcpy PC Integration Card
-        val scrcpyUsbCommand = "scrcpy --new-display=1920x1080/180 --keyboard=uhid --mouse=uhid --stay-awake --window-title=\"DexXP - PC Desktop\""
-        val scrcpyWifiCommand = "scrcpy --tcpip=192.168.10.54:5555 --new-display=1920x1080/180 --keyboard=uhid --mouse=uhid --stay-awake --window-title=\"DexXP - PC Desktop\""
+        // scrcpy PC Integration Card (omit --mouse=uhid so scrcpy targets the virtual display directly via SDK input injection on Android 14)
+        val scrcpyUsbCommand = "scrcpy --new-display=1920x1080/180 --keyboard=uhid --stay-awake --window-title=\"DexXP - PC Desktop\""
+        val scrcpyWifiCommand = "scrcpy --tcpip=192.168.10.54:5555 --new-display=1920x1080/180 --keyboard=uhid --stay-awake --window-title=\"DexXP - PC Desktop\""
 
         Surface(
             shape = RoundedCornerShape(20.dp),

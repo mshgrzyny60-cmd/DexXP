@@ -309,8 +309,10 @@ class DisplayRouterService : Service() {
             presentation.show()
             activePresentation = presentation
             attachedDisplayId = display.displayId
-            // Top-most cursor HUD overlay above desktop
-            cursorOverlayController.attachToDisplay(display)
+            // Top-most cursor HUD overlay above desktop (only for physical HDMI/DP monitors, skip on scrcpy virtual displays to prevent clickjacking touch drops)
+            if (info.transportType != DisplayTransportType.SCRCPY_VIRTUAL_DISPLAY) {
+                cursorOverlayController.attachToDisplay(display)
+            }
             promoteToForeground(
                 statusText = "${info.name} • ${info.resolutionSummary} (${targetDpi}dpi)"
             )
@@ -324,15 +326,7 @@ class DisplayRouterService : Service() {
         val intent = Intent(this, SecondaryDesktopActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
-        val options = ActivityOptions.makeBasic().apply {
-            setLaunchDisplayId(targetDisplayId)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                setPendingIntentBackgroundActivityStartMode(
-                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
-                )
-            }
-        }
-        val bundle = options.toBundle()
+        val bundle = dexApp.appLauncher.buildLaunchActivityOptions(targetDisplayId)
         val directStarted = runCatching {
             startActivity(intent, bundle)
             true

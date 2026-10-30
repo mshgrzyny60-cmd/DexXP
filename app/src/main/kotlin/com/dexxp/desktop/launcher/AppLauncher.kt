@@ -354,15 +354,8 @@ class AppLauncher(
             val homeIntent = Intent(appContext, SecondaryDesktopActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             }
-            val opts = ActivityOptions.makeBasic().apply {
-                setLaunchDisplayId(displayId)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    setPendingIntentBackgroundActivityStartMode(
-                        ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
-                    )
-                }
-            }
-            dispatchActivityIntent(launchContext ?: appContext, homeIntent, opts.toBundle(), displayId, appContext.packageName)
+            val optsBundle = buildLaunchActivityOptions(displayId)
+            dispatchActivityIntent(launchContext ?: appContext, homeIntent, optsBundle, displayId, appContext.packageName)
         } else {
             val standaloneIntent = Intent(appContext, StandaloneDesktopActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)

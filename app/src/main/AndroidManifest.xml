@@ -99,7 +99,7 @@
             android:exported="true"
             android:label="@string/secondary_home_label"
             android:launchMode="singleTask"
-            android:resizeableActivity="true"
+            android:resizeableActivity="false"
             android:stateNotNeeded="true"
             android:theme="@style/Theme.DexXP">
             <intent-filter>
