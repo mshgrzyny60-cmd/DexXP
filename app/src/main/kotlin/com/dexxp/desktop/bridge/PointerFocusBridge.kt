@@ -182,10 +182,10 @@ class PointerFocusBridge(
     fun applyPresentationWindowPolicy(
         window: Window,
         mode: ShellSurfaceMode,
-        needsKeyboardFocus: Boolean,
         displayWidthPx: Int,
         displayHeightPx: Int,
-        densityDpi: Int
+        densityDpi: Int,
+        needsKeyboardFocus: Boolean = true
     ) {
         val decorView = window.peekDecorView() ?: return
         val lp = window.attributes ?: return
@@ -233,10 +233,8 @@ class PointerFocusBridge(
 
         val shouldBeFocusable = when {
             isTvMode && hasActiveApp -> false
-            isTvMode -> true
             mode == ShellSurfaceMode.DOCKED_TASKBAR -> false
-            mode == ShellSurfaceMode.FLYOUT_ACTIVE -> true
-            else -> needsKeyboardFocus
+            else -> true
         }
         flags = if (shouldBeFocusable) {
             flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
@@ -268,12 +266,11 @@ class PointerFocusBridge(
             if (decorView.isAttachedToWindow) {
                 runCatching { window.windowManager.updateViewLayout(decorView, lp) }
             }
-        }
-
-        if (shouldBeFocusable) {
-            decorView.post { decorView.requestFocus() }
-        } else if (decorView.hasFocus()) {
-            decorView.clearFocus()
+            if (shouldBeFocusable) {
+                decorView.post { decorView.requestFocus() }
+            } else if (decorView.hasFocus()) {
+                decorView.clearFocus()
+            }
         }
     }
 

@@ -102,7 +102,6 @@ fun StartMenuPanel(
     val focusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
-        onSearchFocusChanged(true)
         runCatching { focusRequester.requestFocus() }
     }
 

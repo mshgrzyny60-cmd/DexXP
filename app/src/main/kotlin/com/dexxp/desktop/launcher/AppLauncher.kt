@@ -68,6 +68,10 @@ class AppLauncher(
         snapMode: WindowSnapMode = WindowSnapMode.MAXIMIZED,
         launchContext: Context? = null
     ): Boolean {
+        if (sessionRepository.runningWindows.value.any { it.packageName == "com.lemon.lvoverseas" || it.packageName == "com.capcut.editor" }) {
+            sessionRepository.removeWindowRecord("com.lemon.lvoverseas")
+            sessionRepository.removeWindowRecord("com.capcut.editor")
+        }
         val displayInfo = sessionRepository.activeDisplay.value
         val intent = Intent(appContext, com.dexxp.desktop.browser.DesktopWebActivity::class.java).apply {
             putExtra(com.dexxp.desktop.browser.DesktopWebActivity.EXTRA_URL, "https://www.capcut.com/editor")
@@ -212,7 +216,7 @@ class AppLauncher(
     ): Boolean {
         if (packageName == "com.lemon.lvoverseas" || packageName == "com.capcut.editor" || packageName == "dexxp.webapp.capcut_web") {
             val existing = sessionRepository.runningWindows.value.firstOrNull {
-                it.packageName == "dexxp.webapp.capcut_web" || it.packageName == "com.lemon.lvoverseas" || it.packageName == "com.capcut.editor"
+                it.packageName == "dexxp.webapp.capcut_web"
             }
             if (existing != null && !existing.isMinimized) {
                 sessionRepository.markWindowFocused(existing.packageName)

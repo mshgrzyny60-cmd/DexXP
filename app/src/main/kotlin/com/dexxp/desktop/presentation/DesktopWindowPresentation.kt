@@ -58,6 +58,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -187,11 +188,10 @@ class DesktopWindowPresentation(
         scope.launch {
             combine(
                 sessionRepository.shellSurfaceMode,
-                sessionRepository.needsShellKeyboardFocus,
                 sessionRepository.environmentMode,
                 sessionRepository.launchingPackage,
                 keyboardManager.altTabState
-            ) { mode, needsKeyboard, envMode, launching, altTab ->
+            ) { mode, envMode, launching, altTab ->
                 val isTv = envMode == DesktopEnvironmentMode.TV_LEANBACK
                 val isLaunching = launching != null
                 val hasActiveApp = mode == ShellSurfaceMode.DOCKED_TASKBAR && !isLaunching
@@ -201,14 +201,13 @@ class DesktopWindowPresentation(
                     isTv -> ShellSurfaceMode.FULL_DESKTOP
                     else -> mode
                 }
-                val effectiveNeedsKeyboard: Boolean = if (isTv) !hasActiveApp else (needsKeyboard || effectiveMode == ShellSurfaceMode.FLYOUT_ACTIVE)
-                Triple(effectiveMode, effectiveNeedsKeyboard, isTv)
-            }.collect { (mode: ShellSurfaceMode, needsKeyboard: Boolean, isTv: Boolean) ->
+                Pair(effectiveMode, isTv)
+            }.distinctUntilChanged()
+            .collect { (mode: ShellSurfaceMode, isTv: Boolean) ->
                 currentSurfaceMode = mode
                 pointerFocusBridge.applyPresentationWindowPolicy(
                     window = win,
                     mode = mode,
-                    needsKeyboardFocus = needsKeyboard,
                     displayWidthPx = displayWidthPx,
                     displayHeightPx = displayHeightPx,
                     densityDpi = scaledDensityDpi
