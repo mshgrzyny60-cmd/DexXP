@@ -401,6 +401,11 @@ private fun DesktopWebScreen(
                                         // Keep all browsing strictly inside the desktop WebView!
                                         return false
                                     }
+                                    val uriStr = uri.toString()
+                                    // Block deep-link bounces to CapCut mobile app or other video editors so web studio remains in desktop 16:9
+                                    if (uriStr.contains("lemon") || uriStr.contains("lvoverseas") || uriStr.contains("capcut") || scheme?.startsWith("snssdk") == true) {
+                                        return true
+                                    }
                                     return runCatching {
                                         val intent = Intent(Intent.ACTION_VIEW, uri)
                                         context.startActivity(intent)

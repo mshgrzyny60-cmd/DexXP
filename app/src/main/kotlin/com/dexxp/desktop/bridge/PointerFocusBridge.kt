@@ -220,7 +220,8 @@ class PointerFocusBridge(
         var flags = prevFlags
         flags = flags or
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_SPLIT_TOUCH
         flags = flags and WindowManager.LayoutParams.FLAG_DIM_BEHIND.inv()
 
         if (mode == ShellSurfaceMode.DOCKED_TASKBAR) {
@@ -231,11 +232,17 @@ class PointerFocusBridge(
             flags = flags or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
         }
 
+        // On Android 13/14 secondary displays, TYPE_PRIVATE_PRESENTATION belongs to APPLICATION_LAYER.
+        // If FLAG_NOT_FOCUSABLE is set while an external app is running, InputDispatcher directs all
+        // mouse pointer events to the focused external app behind it.
+        // Therefore, we MUST clear FLAG_NOT_FOCUSABLE so the presentation window reliably receives mouse clicks!
+        // We do NOT steal active keyboard focus because decorView.requestFocus() is ONLY called when
+        // a text entry surface (Flyout search, Terminal) explicitly requests it.
         val shouldBeFocusable = when {
             isTvMode && hasActiveApp -> false
-            mode == ShellSurfaceMode.DOCKED_TASKBAR -> false
+            mode == ShellSurfaceMode.DOCKED_TASKBAR -> true
             mode == ShellSurfaceMode.FLYOUT_ACTIVE -> true
-            else -> needsKeyboardFocus
+            else -> true
         }
         flags = if (shouldBeFocusable) {
             flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
@@ -267,9 +274,9 @@ class PointerFocusBridge(
             if (decorView.isAttachedToWindow) {
                 runCatching { window.windowManager.updateViewLayout(decorView, lp) }
             }
-            if (shouldBeFocusable) {
+            if (mode == ShellSurfaceMode.FLYOUT_ACTIVE && needsKeyboardFocus) {
                 decorView.post { decorView.requestFocus() }
-            } else if (decorView.hasFocus()) {
+            } else if (decorView.hasFocus() && mode == ShellSurfaceMode.DOCKED_TASKBAR) {
                 decorView.clearFocus()
             }
         }

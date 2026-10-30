@@ -4,6 +4,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -103,8 +104,14 @@ fun StartMenuPanel(
 
     LaunchedEffect(Unit) {
         onSearchFocusChanged(true)
-        kotlinx.coroutines.delay(60)
-        runCatching { focusRequester.requestFocus() }
+        for (attempt in 1..4) {
+            kotlinx.coroutines.delay(40L * attempt)
+            val focused = runCatching {
+                focusRequester.requestFocus()
+                true
+            }.getOrDefault(false)
+            if (focused) break
+        }
     }
 
     DisposableEffect(Unit) {
@@ -163,6 +170,12 @@ fun StartMenuPanel(
                         color = MaterialTheme.colorScheme.outlineVariant,
                         shape = RoundedCornerShape(50)
                     )
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        focusRequester.requestFocus()
+                    }
                     .padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -173,7 +186,17 @@ fun StartMenuPanel(
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
-                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            focusRequester.requestFocus()
+                        },
+                    contentAlignment = Alignment.CenterStart
+                ) {
                     if (searchQuery.isEmpty()) {
                         Text(
                             text = "Search installed apps, packages, tools...",

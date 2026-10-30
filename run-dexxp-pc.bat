@@ -33,14 +33,14 @@ echo.
 echo [2/3] Starting DexXP Full Desktop Window (1920x1080 16:9)...
 echo       (Creating clean virtual display - zero phone status bars or buttons!)
 echo.
-%SCRCPY% --new-display=1920x1080/280 --keyboard=uhid --mouse=uhid --stay-awake --window-title="DexXP - PC Desktop"
+%SCRCPY% --new-display=1920x1080/180 --keyboard=uhid --stay-awake --window-title="DexXP - PC Desktop"
 if %ERRORLEVEL% EQU 0 goto done
 
 echo.
 echo [FALLBACK] Virtual display closed or unsupported.
 echo           Launching Standalone Immersive Desktop Shell...
 %ADB% shell am start -n com.dexxp.desktop/.StandaloneDesktopActivity >nul 2>&1
-%SCRCPY% --fullscreen --keyboard=uhid --mouse=uhid --stay-awake --window-title="DexXP - PC Desktop (Fullscreen)"
+%SCRCPY% --fullscreen --keyboard=uhid --stay-awake --window-title="DexXP - PC Desktop (Fullscreen)"
 
 :done
 echo.
