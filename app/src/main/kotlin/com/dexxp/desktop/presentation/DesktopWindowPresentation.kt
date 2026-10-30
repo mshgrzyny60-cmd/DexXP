@@ -7,6 +7,7 @@ import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.view.Display
+import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Window
@@ -221,6 +222,14 @@ class DesktopWindowPresentation(
             return false
         }
         return super.dispatchTouchEvent(ev)
+    }
+
+    override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+        if (ev.source and InputDevice.SOURCE_CLASS_POINTER != 0) {
+            val isDown = (ev.buttonState and MotionEvent.BUTTON_PRIMARY) != 0
+            pointerFocusBridge.setPointerPosition(ev.x, ev.y, isDown)
+        }
+        return super.dispatchGenericMotionEvent(ev)
     }
 
     override fun onStop() {

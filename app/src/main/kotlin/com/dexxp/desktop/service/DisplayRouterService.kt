@@ -175,7 +175,7 @@ class DisplayRouterService : Service() {
             if (attachedDisplayId != Display.INVALID_DISPLAY) {
                 teardownActivePresentation()
             }
-            promoteToForeground("Ready • Plug in USB-C DisplayPort, HDMI, or Wireless Display")
+            promoteToForeground("Ready • Connect USB-C DP Alt, HDMI, Wireless TV, or scrcpy PC")
             return
         }
 
@@ -185,6 +185,15 @@ class DisplayRouterService : Service() {
     }
 
     private fun findBestExternalDisplay(): Display? {
+        val scrcpyDisplay = displayManager.displays.firstOrNull { d ->
+            d.displayId != Display.DEFAULT_DISPLAY &&
+                d.isValid &&
+                d.name?.contains("scrcpy", ignoreCase = true) == true
+        }
+        if (scrcpyDisplay != null) {
+            return scrcpyDisplay
+        }
+
         val presentationDisplays = displayManager
             .getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION)
             .filter { isEligibleExternalDisplay(it) }
@@ -206,6 +215,7 @@ class DisplayRouterService : Service() {
 
     private fun isEligibleExternalDisplay(display: Display): Boolean {
         if (display.displayId == Display.DEFAULT_DISPLAY || !display.isValid) return false
+        if (display.name?.contains("scrcpy", ignoreCase = true) == true) return true
         val flags = display.flags
         val isPrivateInaccessible = (flags and Display.FLAG_PRIVATE) != 0 &&
             (flags and Display.FLAG_PRESENTATION) == 0
@@ -356,6 +366,8 @@ class DisplayRouterService : Service() {
     private fun classifyDisplayTransport(display: Display): DisplayTransportType {
         val lowerName = (display.name ?: "").lowercase()
         return when {
+            lowerName.contains("scrcpy") -> DisplayTransportType.SCRCPY_VIRTUAL_DISPLAY
+
             lowerName.contains("wifi") ||
                 lowerName.contains("miracast") ||
                 lowerName.contains("cast") ||

@@ -254,6 +254,21 @@ class PointerFocusBridge(
         }
     }
 
+    fun setPointerPosition(screenX: Float, screenY: Float, isDown: Boolean = false) {
+        val now = SystemClock.uptimeMillis()
+        _pointerState.update { current ->
+            val maxX = (current.displayWidth - 1).coerceAtLeast(1).toFloat()
+            val maxY = (current.displayHeight - 1).coerceAtLeast(1).toFloat()
+            current.copy(
+                x = screenX.coerceIn(0f, maxX),
+                y = screenY.coerceIn(0f, maxY),
+                visible = true,
+                isPrimaryDown = isDown,
+                lastInteractionMs = now
+            )
+        }
+    }
+
     fun movePointerBy(deltaX: Float, deltaY: Float) {
         if (deltaX == 0f && deltaY == 0f) return
         val sensitivity = sessionRepository.touchpadSensitivity.value

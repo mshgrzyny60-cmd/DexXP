@@ -979,6 +979,85 @@ private fun SystemAndAdbSetupPane(
                 }
             }
         }
+
+        // scrcpy PC Integration Card
+        val scrcpyUsbCommand = "scrcpy --new-display=1920x1080/360 --keyboard=uhid --mouse=uhid"
+        val scrcpyWifiCommand = "scrcpy --tcpip=192.168.10.54:5555 --new-display=1920x1080/360 --keyboard=uhid --mouse=uhid"
+
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(20.dp))
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(DesktopIcons.Monitor, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "scrcpy PC Mode (USB & Wireless)",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                Text(
+                    text = "Launch DexXP as a standalone desktop window on your PC, Mac, or Linux without any physical monitor! Scrcpy streams a 1080p virtual display with full PC mouse and keyboard forwarding.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilledTonalButton(
+                        onClick = { copyToClipboard(context, scrcpyUsbCommand) },
+                        shape = RoundedCornerShape(50),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(DesktopIcons.Copy, null, Modifier.size(14.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Copy USB", style = MaterialTheme.typography.labelMedium)
+                    }
+
+                    FilledTonalButton(
+                        onClick = { copyToClipboard(context, scrcpyWifiCommand) },
+                        shape = RoundedCornerShape(50),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(DesktopIcons.Copy, null, Modifier.size(14.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Copy Wi-Fi", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        text = scrcpyUsbCommand,
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
     }
 }
 

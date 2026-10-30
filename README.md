@@ -31,7 +31,7 @@
 For years, desktop productivity on Android was either locked behind **vendor exclusivity** (Samsung DeX on Galaxy S/Fold series, Motorola Ready For) or broken by modern Android security restrictions:
 
 - **Legacy open-source apps (e.g. Taskbar by farmerbb)** broke on Android 12+ due to Google's strict Background Activity Launch (BAL) limits and deprecated Freeform windowing hooks.
-- **PC-mirroring tools (e.g. scrcpy)** require an expensive host laptop/desktop PC and cannot operate standalone.
+- **Standalone & scrcpy Ready:** Works standalone on monitors/TVs without a PC, or pairs seamlessly with **scrcpy** (`scrcpy --new-display`) to stream a dedicated virtual desktop to your PC, Mac, or Linux laptop with full mouse and keyboard forwarding.
 - **Hardware constraints:** Millions of modern phones (Xiaomi, Redmi, Poco, older Pixels) ship with USB 2.0 ports without physical DisplayPort Alt-Mode wiring.
 
 **DexXP solves this without Root**, combining modern Android 12–17+ APIs into a cohesive, lightning-fast desktop shell designed in Material Design 3.
@@ -52,6 +52,7 @@ For years, desktop productivity on Android was either locked behind **vendor exc
 | **🔋 AMOLED Burn-In Guard** | `#000000` zero-emission phone blackout with sub-pixel shift during mouse usage; wakes instantly on screen touch. | Automatic / Sleep Screen Chip |
 | **🖱️ 120–240Hz Virtual Touchpad** | Multi-touch hardware pointer dispatcher with smooth acceleration curves and dynamic DPI overrides. | On-phone Touchpad Tab |
 | **📱 Standalone On-Device Desktop** | Fullscreen landscape desktop mode running directly on your phone screen when no external display is available. | Desktop View Tab |
+| **💻 Dedicated scrcpy PC Mode** | Streams a 1080p secondary virtual display directly to PC, Mac, or Linux over USB or Wi-Fi with native mouse/keyboard forwarding. | `scrcpy --new-display=1920x1080` |
 
 ---
 

@@ -15,6 +15,7 @@ import kotlin.math.roundToInt
 enum class DisplayTransportType(val label: String) {
     HDMI_DP_ALT_MODE("USB-C DP Alt / HDMI"),
     WIRELESS_MIRACAST("Wireless Display"),
+    SCRCPY_VIRTUAL_DISPLAY("scrcpy Virtual Display (PC)"),
     VIRTUAL_OR_OVERLAY("Virtual / Simulated")
 }
 
