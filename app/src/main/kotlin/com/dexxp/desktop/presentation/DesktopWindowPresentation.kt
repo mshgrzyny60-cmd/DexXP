@@ -39,6 +39,7 @@ import com.dexxp.desktop.keyboard.DesktopKeyboardManager
 import com.dexxp.desktop.launcher.AppLauncher
 import com.dexxp.desktop.launcher.AppRepository
 import com.dexxp.desktop.layout.WorkspaceLayoutPresetManager
+import com.dexxp.desktop.model.DesktopEnvironmentMode
 import com.dexxp.desktop.model.DisplayPerformanceProfile
 import com.dexxp.desktop.model.ShellSurfaceMode
 import com.dexxp.desktop.overview.MissionControlOverviewController
@@ -123,6 +124,8 @@ class DesktopWindowPresentation(
         decorView.setViewTreeSavedStateRegistryOwner(this)
 
         val composeView = ComposeView(context).apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
             setViewTreeLifecycleOwner(this@DesktopWindowPresentation)
             setViewTreeViewModelStoreOwner(this@DesktopWindowPresentation)
             setViewTreeSavedStateRegistryOwner(this@DesktopWindowPresentation)
@@ -179,20 +182,24 @@ class DesktopWindowPresentation(
             combine(
                 sessionRepository.shellSurfaceMode,
                 sessionRepository.needsShellKeyboardFocus,
+                sessionRepository.environmentMode,
                 keyboardManager.altTabState
-            ) { mode, needsKeyboard, altTab ->
+            ) { mode, needsKeyboard, envMode, altTab ->
+                val isTv = envMode == DesktopEnvironmentMode.TV_LEANBACK
                 val effectiveMode = if (altTab.isVisible) {
                     ShellSurfaceMode.FLYOUT_ACTIVE
+                } else if (isTv) {
+                    ShellSurfaceMode.FULL_DESKTOP
                 } else {
                     mode
                 }
-                effectiveMode to needsKeyboard
-            }.collect { (mode, needsKeyboard) ->
+                Triple(effectiveMode, needsKeyboard, isTv)
+            }.collect { (mode, needsKeyboard, isTv) ->
                 currentSurfaceMode = mode
                 pointerFocusBridge.applyPresentationWindowPolicy(
                     window = win,
                     mode = mode,
-                    needsKeyboardFocus = needsKeyboard,
+                    needsKeyboardFocus = needsKeyboard || isTv,
                     displayWidthPx = displayWidthPx,
                     displayHeightPx = displayHeightPx,
                     densityDpi = scaledDensityDpi

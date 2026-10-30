@@ -84,6 +84,7 @@ import com.dexxp.desktop.model.DesktopEnvironmentMode
 import com.dexxp.desktop.model.ExternalDisplayInfo
 import com.dexxp.desktop.model.ExternalTextInputState
 import com.dexxp.desktop.model.SystemReadinessStatus
+import com.dexxp.desktop.model.TvNavigationAction
 import com.dexxp.desktop.overview.MissionControlOverviewController
 import com.dexxp.desktop.power.AmoledBlackoutHud
 import com.dexxp.desktop.power.PhoneScreenPowerController
@@ -321,8 +322,10 @@ fun PhoneControllerScreen(
 
                 if (environmentMode == DesktopEnvironmentMode.TV_LEANBACK && tvControllerSubTab == 0) {
                     PhoneTvRemoteDpad(
+                        sessionRepository = sessionRepository,
                         pointerFocusBridge = pointerFocusBridge,
                         onBack = {
+                            sessionRepository.sendTvNavigation(TvNavigationAction.BACK)
                             val handled = DesktopPointerAccessibilityService.instance?.performGlobalAction(
                                 AccessibilityService.GLOBAL_ACTION_BACK
                             ) ?: false
@@ -1041,6 +1044,7 @@ private fun copyToClipboard(context: Context, script: String) {
  */
 @Composable
 private fun PhoneTvRemoteDpad(
+    sessionRepository: DesktopSessionRepository,
     pointerFocusBridge: PointerFocusBridge,
     onBack: () -> Unit,
     onHome: () -> Unit,
@@ -1128,6 +1132,7 @@ private fun PhoneTvRemoteDpad(
             IconButton(
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    sessionRepository.sendTvNavigation(TvNavigationAction.UP)
                     pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_DPAD_UP)
                 },
                 modifier = Modifier
@@ -1135,13 +1140,14 @@ private fun PhoneTvRemoteDpad(
                     .padding(top = 12.dp)
                     .size(56.dp)
             ) {
-                Icon(DesktopIcons.Maximize, contentDescription = "D-Pad Up", modifier = Modifier.size(28.dp))
+                Icon(DesktopIcons.ArrowUp, contentDescription = "D-Pad Up", modifier = Modifier.size(32.dp))
             }
 
             // DOWN Button
             IconButton(
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    sessionRepository.sendTvNavigation(TvNavigationAction.DOWN)
                     pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_DPAD_DOWN)
                 },
                 modifier = Modifier
@@ -1149,13 +1155,14 @@ private fun PhoneTvRemoteDpad(
                     .padding(bottom = 12.dp)
                     .size(56.dp)
             ) {
-                Icon(DesktopIcons.Minimize, contentDescription = "D-Pad Down", modifier = Modifier.size(28.dp))
+                Icon(DesktopIcons.ArrowDown, contentDescription = "D-Pad Down", modifier = Modifier.size(32.dp))
             }
 
             // LEFT Button
             IconButton(
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    sessionRepository.sendTvNavigation(TvNavigationAction.LEFT)
                     pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_DPAD_LEFT)
                 },
                 modifier = Modifier
@@ -1163,13 +1170,14 @@ private fun PhoneTvRemoteDpad(
                     .padding(start = 12.dp)
                     .size(56.dp)
             ) {
-                Icon(DesktopIcons.SplitLeft, contentDescription = "D-Pad Left", modifier = Modifier.size(28.dp))
+                Icon(DesktopIcons.ArrowLeft, contentDescription = "D-Pad Left", modifier = Modifier.size(32.dp))
             }
 
             // RIGHT Button
             IconButton(
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    sessionRepository.sendTvNavigation(TvNavigationAction.RIGHT)
                     pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_DPAD_RIGHT)
                 },
                 modifier = Modifier
@@ -1177,13 +1185,14 @@ private fun PhoneTvRemoteDpad(
                     .padding(end = 12.dp)
                     .size(56.dp)
             ) {
-                Icon(DesktopIcons.SplitRight, contentDescription = "D-Pad Right", modifier = Modifier.size(28.dp))
+                Icon(DesktopIcons.ArrowRight, contentDescription = "D-Pad Right", modifier = Modifier.size(32.dp))
             }
 
             // CENTER OK Button
             Surface(
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    sessionRepository.sendTvNavigation(TvNavigationAction.SELECT)
                     pointerFocusBridge.forwardKeyCodeToShell(KeyEvent.KEYCODE_DPAD_CENTER)
                 },
                 shape = CircleShape,

@@ -71,36 +71,49 @@ class AppLauncher(
         )
 
         val isTvMode = sessionRepository.environmentMode.value == DesktopEnvironmentMode.TV_LEANBACK
-        val optionsBundle = if (isTvMode) {
-            ActivityOptions.makeBasic().apply {
-                if (targetDisplayId != Display.DEFAULT_DISPLAY) {
-                    setLaunchDisplayId(targetDisplayId)
-                }
-            }.toBundle()
-        } else {
-            buildFreeformActivityOptions(
-                targetDisplayId = targetDisplayId,
-                launchBounds = if (targetDisplayId != Display.DEFAULT_DISPLAY) bounds else null
-            )
-        }
+        val optionsBundle = buildLaunchActivityOptions(
+            targetDisplayId = targetDisplayId,
+            isTvMode = isTvMode,
+            launchBounds = if (targetDisplayId != Display.DEFAULT_DISPLAY) bounds else null
+        )
 
         val dispatcherContext = launchContext ?: appContext
+        val a11y = DesktopPointerAccessibilityService.instance
         return runCatching {
             dispatcherContext.startActivity(intent, optionsBundle)
-            if (targetDisplayId != Display.DEFAULT_DISPLAY && !isTvMode) {
-                if (snapMode == WindowSnapMode.FREEFORM_CASCADED) {
-                    rememberedBounds[app.packageName] = Rect(bounds)
+            if (targetDisplayId != Display.DEFAULT_DISPLAY) {
+                if (isTvMode) {
+                    sessionRepository.recordWindowLaunched(
+                        packageName = app.packageName,
+                        activityName = app.activityName,
+                        label = app.label,
+                        bounds = Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080),
+                        snapMode = WindowSnapMode.MAXIMIZED,
+                        displayId = targetDisplayId
+                    )
+                } else {
+                    if (snapMode == WindowSnapMode.FREEFORM_CASCADED) {
+                        rememberedBounds[app.packageName] = Rect(bounds)
+                    }
+                    sessionRepository.recordWindowLaunched(
+                        packageName = app.packageName,
+                        activityName = app.activityName,
+                        label = app.label,
+                        bounds = bounds,
+                        snapMode = snapMode,
+                        displayId = targetDisplayId
+                    )
                 }
-                sessionRepository.recordWindowLaunched(
-                    packageName = app.packageName,
-                    activityName = app.activityName,
-                    label = app.label,
-                    bounds = bounds,
-                    snapMode = snapMode,
-                    displayId = targetDisplayId
-                )
             }
             true
+        }.recoverCatching { err ->
+            Log.w(TAG, "dispatcherContext.startActivity failed, trying AccessibilityService...", err)
+            if (a11y != null) {
+                a11y.startActivity(intent, optionsBundle)
+                true
+            } else {
+                throw err
+            }
         }.onFailure { err ->
             Log.e(TAG, "Failed launching ${app.uniqueKey} on display $targetDisplayId", err)
         }.getOrDefault(false)
@@ -454,15 +467,16 @@ class AppLauncher(
     fun buildFreeformOptionsBundleForDisplay(
         targetDisplayId: Int,
         launchBounds: Rect? = null
-    ): Bundle = buildFreeformActivityOptions(targetDisplayId, launchBounds)
+    ): Bundle = buildLaunchActivityOptions(targetDisplayId, isTvMode = false, launchBounds = launchBounds)
 
-    private fun buildFreeformActivityOptions(
+    fun buildLaunchActivityOptions(
         targetDisplayId: Int,
-        launchBounds: Rect?
+        isTvMode: Boolean = false,
+        launchBounds: Rect? = null
     ): Bundle {
         val options = ActivityOptions.makeBasic().apply {
             setLaunchDisplayId(targetDisplayId)
-            if (launchBounds != null) {
+            if (!isTvMode && launchBounds != null) {
                 setLaunchBounds(launchBounds)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -472,24 +486,31 @@ class AppLauncher(
             }
         }
 
-        if (launchBounds != null) {
+        val targetWindowingMode = if (isTvMode) WINDOWING_MODE_FULLSCREEN else WINDOWING_MODE_FREEFORM
+        if (isTvMode || launchBounds != null) {
             runCatching {
-                setLaunchWindowingModeMethod?.invoke(options, WINDOWING_MODE_FREEFORM)
+                setLaunchWindowingModeMethod?.invoke(options, targetWindowingMode)
             }
         }
 
         return options.toBundle().apply {
-            if (launchBounds != null) {
-                putInt(KEY_LAUNCH_WINDOWING_MODE, WINDOWING_MODE_FREEFORM)
+            if (isTvMode || launchBounds != null) {
+                putInt(KEY_LAUNCH_WINDOWING_MODE, targetWindowingMode)
             }
         }
     }
+
+    private fun buildFreeformActivityOptions(
+        targetDisplayId: Int,
+        launchBounds: Rect?
+    ): Bundle = buildLaunchActivityOptions(targetDisplayId, isTvMode = false, launchBounds = launchBounds)
 
     companion object {
         private const val TAG = "AppLauncher"
         const val TASKBAR_HEIGHT_DP = 56
         private const val CASCADE_STEP_DP = 32
         private const val CASCADE_MODULO = 6
+        const val WINDOWING_MODE_FULLSCREEN = 1
         const val WINDOWING_MODE_FREEFORM = 5
         private const val KEY_LAUNCH_WINDOWING_MODE = "android.activity.windowingMode"
     }

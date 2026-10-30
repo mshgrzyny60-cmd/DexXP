@@ -13,6 +13,7 @@ import com.dexxp.desktop.model.RunningWindowRecord
 import com.dexxp.desktop.model.ShellSurfaceMode
 import com.dexxp.desktop.model.SnapPreviewState
 import com.dexxp.desktop.model.SystemReadinessStatus
+import com.dexxp.desktop.model.TvNavigationAction
 import com.dexxp.desktop.model.WallpaperPreset
 import com.dexxp.desktop.model.WindowSnapMode
 import com.dexxp.desktop.system.SystemFlagsInspector
@@ -20,9 +21,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
@@ -77,6 +82,16 @@ class DesktopSessionRepository(context: Context) {
 
     private val _isTerminalWindowOpen = MutableStateFlow(false)
     val isTerminalWindowOpen: StateFlow<Boolean> = _isTerminalWindowOpen.asStateFlow()
+
+    private val _tvNavigationEvents = MutableSharedFlow<TvNavigationAction>(
+        extraBufferCapacity = 16,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val tvNavigationEvents: SharedFlow<TvNavigationAction> = _tvNavigationEvents.asSharedFlow()
+
+    fun sendTvNavigation(action: TvNavigationAction) {
+        _tvNavigationEvents.tryEmit(action)
+    }
 
     private val _isShowDesktopActive = MutableStateFlow(true)
     val isShowDesktopActive: StateFlow<Boolean> = _isShowDesktopActive.asStateFlow()

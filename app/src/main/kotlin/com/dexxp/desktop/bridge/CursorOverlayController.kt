@@ -14,6 +14,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import com.dexxp.desktop.model.DesktopEnvironmentMode
 import com.dexxp.desktop.model.PointerState
 import com.dexxp.desktop.model.SnapPreviewState
 import com.dexxp.desktop.state.DesktopSessionRepository
@@ -21,6 +22,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -100,6 +103,7 @@ class CursorOverlayController(
         }
         val sprite = CursorSpriteView(windowContext).apply {
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            visibility = View.GONE
         }
 
         val root = FrameLayout(windowContext).apply {
@@ -156,7 +160,12 @@ class CursorOverlayController(
         scope = coroutineScope
 
         coroutineScope.launch {
-            pointerFocusBridge.pointerState.collect { updateCursorSprite(it) }
+            combine(
+                pointerFocusBridge.pointerState,
+                sessionRepository.environmentMode
+            ) { state, envMode ->
+                updateCursorSprite(state, envMode)
+            }.collect()
         }
         coroutineScope.launch {
             sessionRepository.snapPreview.collect { updateSnapPreview(it) }
@@ -167,8 +176,12 @@ class CursorOverlayController(
         return true
     }
 
-    private fun updateCursorSprite(state: PointerState) {
+    private fun updateCursorSprite(state: PointerState, envMode: DesktopEnvironmentMode) {
         val sprite = spriteView ?: return
+        if (envMode == DesktopEnvironmentMode.TV_LEANBACK) {
+            sprite.visibility = View.GONE
+            return
+        }
         sprite.visibility = if (state.visible) View.VISIBLE else View.INVISIBLE
         sprite.translationX = state.x
         sprite.translationY = state.y

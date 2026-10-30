@@ -783,4 +783,60 @@ object DesktopIcons {
             }
         }
     }
+
+    val ArrowUp: ImageVector by lazy {
+        symbol("ArrowUp") {
+            path(
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 2.5f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(12f, 20f); lineTo(12f, 4f)
+                moveTo(5f, 11f); lineTo(12f, 4f); lineTo(19f, 11f)
+            }
+        }
+    }
+
+    val ArrowDown: ImageVector by lazy {
+        symbol("ArrowDown") {
+            path(
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 2.5f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(12f, 4f); lineTo(12f, 20f)
+                moveTo(5f, 13f); lineTo(12f, 20f); lineTo(19f, 13f)
+            }
+        }
+    }
+
+    val ArrowLeft: ImageVector by lazy {
+        symbol("ArrowLeft") {
+            path(
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 2.5f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(20f, 12f); lineTo(4f, 12f)
+                moveTo(11f, 5f); lineTo(4f, 12f); lineTo(11f, 19f)
+            }
+        }
+    }
+
+    val ArrowRight: ImageVector by lazy {
+        symbol("ArrowRight") {
+            path(
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 2.5f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(4f, 12f); lineTo(20f, 12f)
+                moveTo(13f, 5f); lineTo(20f, 12f); lineTo(13f, 19f)
+            }
+        }
+    }
 }

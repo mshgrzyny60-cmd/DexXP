@@ -27,6 +27,13 @@ enum class DesktopEnvironmentMode(val label: String, val description: String) {
 }
 
 /**
+ * Directional & action inputs dispatched from the phone TV remote D-Pad to the TV display.
+ */
+enum class TvNavigationAction {
+    UP, DOWN, LEFT, RIGHT, SELECT, BACK
+}
+
+/**
  * Performance & resolution throttle profiles preventing Wi-Fi bandwidth choking on 4K TVs.
  */
 enum class DisplayPerformanceProfile(val label: String, val maxResolutionLabel: String) {

@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilterChip
@@ -35,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -47,6 +49,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -58,6 +61,7 @@ import com.dexxp.desktop.model.AppCategory
 import com.dexxp.desktop.model.DesktopAppItem
 import com.dexxp.desktop.model.DesktopEnvironmentMode
 import com.dexxp.desktop.model.DisplayPerformanceProfile
+import com.dexxp.desktop.model.TvNavigationAction
 import com.dexxp.desktop.state.DesktopSessionRepository
 import com.dexxp.desktop.ui.icons.DesktopIcons
 import java.text.SimpleDateFormat
@@ -82,6 +86,10 @@ fun TvLeanbackWorkspaceRoot(
     val perfProfile by sessionRepository.performanceProfile.collectAsState()
     val audioRoutes by audioRouteManager.routes.collectAsState()
     val activeAudioRoute = audioRoutes.firstOrNull { it.isSelected }
+
+    val context = LocalContext.current
+    var focusedAppIndex by remember { mutableIntStateOf(0) }
+    val gridState = rememberLazyGridState()
 
     var selectedCategoryIndex by remember { mutableIntStateOf(0) }
     val categories = remember {
@@ -114,6 +122,49 @@ fun TvLeanbackWorkspaceRoot(
                     if (tools.isNotEmpty()) tools else installedApps.take(12)
                 }
                 else -> installedApps
+            }
+        }
+    }
+
+    LaunchedEffect(displayedApps) {
+        if (focusedAppIndex >= displayedApps.size) {
+            focusedAppIndex = (displayedApps.size - 1).coerceAtLeast(0)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        sessionRepository.tvNavigationEvents.collect { action ->
+            val appCount = displayedApps.size
+            if (appCount == 0) return@collect
+            when (action) {
+                TvNavigationAction.LEFT -> {
+                    focusedAppIndex = (focusedAppIndex - 1).coerceAtLeast(0)
+                    gridState.animateScrollToItem(focusedAppIndex)
+                }
+                TvNavigationAction.RIGHT -> {
+                    focusedAppIndex = (focusedAppIndex + 1).coerceAtMost(appCount - 1)
+                    gridState.animateScrollToItem(focusedAppIndex)
+                }
+                TvNavigationAction.UP -> {
+                    focusedAppIndex = (focusedAppIndex - 5).coerceAtLeast(0)
+                    gridState.animateScrollToItem(focusedAppIndex)
+                }
+                TvNavigationAction.DOWN -> {
+                    focusedAppIndex = (focusedAppIndex + 5).coerceAtMost(appCount - 1)
+                    gridState.animateScrollToItem(focusedAppIndex)
+                }
+                TvNavigationAction.SELECT -> {
+                    if (focusedAppIndex in displayedApps.indices) {
+                        appLauncher.launchApp(displayedApps[focusedAppIndex], launchContext = context)
+                    }
+                }
+                TvNavigationAction.BACK -> {
+                    if (selectedCategoryIndex != 0) {
+                        selectedCategoryIndex = 0
+                        focusedAppIndex = 0
+                        gridState.animateScrollToItem(0)
+                    }
+                }
             }
         }
     }
@@ -197,6 +248,7 @@ fun TvLeanbackWorkspaceRoot(
 
             // Big 10-Foot App Grid
             LazyVerticalGrid(
+                state = gridState,
                 columns = GridCells.Adaptive(minSize = 180.dp),
                 horizontalArrangement = Arrangement.spacedBy(20.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
@@ -212,8 +264,10 @@ fun TvLeanbackWorkspaceRoot(
                     val app = displayedApps[idx]
                     TvAppCard(
                         app = app,
+                        isExternalFocused = (idx == focusedAppIndex),
                         onLaunch = {
-                            appLauncher.launchApp(app)
+                            focusedAppIndex = idx
+                            appLauncher.launchApp(app, launchContext = context)
                         }
                     )
                 }
@@ -229,12 +283,13 @@ fun TvLeanbackWorkspaceRoot(
 @Composable
 private fun TvAppCard(
     app: DesktopAppItem,
+    isExternalFocused: Boolean = false,
     onLaunch: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val isHovered by interactionSource.collectIsHoveredAsState()
-    val isHighlighted = isFocused || isHovered
+    val isHighlighted = isFocused || isHovered || isExternalFocused
 
     val scale by animateFloatAsState(
         targetValue = if (isHighlighted) 1.08f else 1.0f,
@@ -251,13 +306,13 @@ private fun TvAppCard(
         } else {
             MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.75f)
         },
-        tonalElevation = if (isHighlighted) 8.dp else 1.dp,
+        tonalElevation = if (isHighlighted) 10.dp else 1.dp,
         modifier = Modifier
             .scale(scale)
             .height(160.dp)
             .focusable(interactionSource = interactionSource)
             .border(
-                width = if (isHighlighted) 2.5.dp else 1.dp,
+                width = if (isHighlighted) 3.dp else 1.dp,
                 color = if (isHighlighted) {
                     MaterialTheme.colorScheme.primary
                 } else {

@@ -10,6 +10,7 @@ import android.view.View
 import android.view.Window
 import android.view.WindowManager
 import com.dexxp.desktop.launcher.AppLauncher
+import com.dexxp.desktop.model.DesktopEnvironmentMode
 import com.dexxp.desktop.model.ExternalWindowFrame
 import com.dexxp.desktop.model.PointerState
 import com.dexxp.desktop.model.ShellSurfaceMode
@@ -212,7 +213,8 @@ class PointerFocusBridge(
             WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
         flags = flags and WindowManager.LayoutParams.FLAG_DIM_BEHIND.inv()
 
-        val shouldBeFocusable = needsKeyboardFocus && mode != ShellSurfaceMode.DOCKED_TASKBAR
+        val isTvMode = sessionRepository.environmentMode.value == DesktopEnvironmentMode.TV_LEANBACK
+        val shouldBeFocusable = isTvMode || (needsKeyboardFocus && mode != ShellSurfaceMode.DOCKED_TASKBAR)
         flags = if (shouldBeFocusable) {
             flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
         } else {
@@ -504,10 +506,14 @@ class PointerFocusBridge(
 
     fun forwardKeyCodeToShell(keyCode: Int): Boolean {
         val reg = presentationTarget ?: return false
+        val win = reg.window
+        val targetView = win.currentFocus ?: win.decorView
         val now = SystemClock.uptimeMillis()
         val down = KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0)
         val up = KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0)
-        return reg.window.superDispatchKeyEvent(down) || reg.window.superDispatchKeyEvent(up)
+        val handledDown = targetView.dispatchKeyEvent(down)
+        val handledUp = targetView.dispatchKeyEvent(up)
+        return handledDown || handledUp || win.superDispatchKeyEvent(down) || win.superDispatchKeyEvent(up)
     }
 
     fun forwardRawKeyEventToShell(event: KeyEvent): Boolean {
