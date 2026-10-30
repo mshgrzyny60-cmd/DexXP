@@ -186,9 +186,10 @@ class DisplayRouterService : Service() {
 
     private fun findBestExternalDisplay(): Display? {
         val scrcpyDisplay = displayManager.displays.firstOrNull { d ->
-            d.displayId != Display.DEFAULT_DISPLAY &&
-                d.isValid &&
-                d.name?.contains("scrcpy", ignoreCase = true) == true
+            if (d.displayId == Display.DEFAULT_DISPLAY || !d.isValid) return@firstOrNull false
+            if (d.name?.contains("scrcpy", ignoreCase = true) != true) return@firstOrNull false
+            val m = readRealDisplayMetrics(d)
+            m.widthPixels >= m.heightPixels
         }
         if (scrcpyDisplay != null) {
             return scrcpyDisplay

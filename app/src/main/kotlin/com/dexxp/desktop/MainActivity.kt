@@ -4,7 +4,9 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.InputDevice
 import android.view.KeyEvent
+import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -92,6 +94,37 @@ class MainActivity : ComponentActivity() {
             return true
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        if (event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)) {
+            val app = application as DexXpApplication
+            when (event.actionMasked) {
+                MotionEvent.ACTION_HOVER_MOVE,
+                MotionEvent.ACTION_HOVER_ENTER,
+                MotionEvent.ACTION_MOVE -> {
+                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = false)
+                }
+            }
+        }
+        return super.dispatchGenericMotionEvent(event)
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (event.isFromSource(InputDevice.SOURCE_MOUSE)) {
+            val app = application as DexXpApplication
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN,
+                MotionEvent.ACTION_MOVE -> {
+                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = true)
+                }
+                MotionEvent.ACTION_UP,
+                MotionEvent.ACTION_CANCEL -> {
+                    app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = false)
+                }
+            }
+        }
+        return super.dispatchTouchEvent(event)
     }
 
     private fun ensurePermissionsAndStartEngine() {

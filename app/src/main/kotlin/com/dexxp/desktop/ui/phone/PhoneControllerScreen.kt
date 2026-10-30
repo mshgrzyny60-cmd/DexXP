@@ -2,6 +2,7 @@ package com.dexxp.desktop.ui.phone
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityService
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -11,7 +12,7 @@ import android.net.Uri
 import android.provider.Settings
 import android.view.KeyEvent
 import android.widget.Toast
-import androidx.core.content.ContextCompat
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -51,6 +52,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -74,7 +76,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.dexxp.desktop.DexXpApplication
+import com.dexxp.desktop.StandaloneDesktopActivity
 import com.dexxp.desktop.bridge.DesktopPointerAccessibilityService
 import com.dexxp.desktop.bridge.PointerFocusBridge
 import com.dexxp.desktop.continuity.PhoneHubController
@@ -143,6 +150,24 @@ fun PhoneControllerScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (selectedTab == 2) {
+            val activity = context as? Activity
+            val window = activity?.window
+            if (window != null) {
+                DisposableEffect(window) {
+                    val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+                    insetsController.hide(WindowInsetsCompat.Type.systemBars())
+                    insetsController.systemBarsBehavior =
+                        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    onDispose {
+                        insetsController.show(WindowInsetsCompat.Type.systemBars())
+                    }
+                }
+            }
+
+            BackHandler {
+                selectedTab = 0
+            }
+
             Box(modifier = Modifier.fillMaxSize()) {
                 val app = context.applicationContext as DexXpApplication
                 DesktopWorkspaceRoot(
@@ -162,37 +187,9 @@ fun PhoneControllerScreen(
                     missionControlController = app.missionControlController,
                     phoneHubController = app.phoneHubController,
                     keyboardManager = keyboardManager,
-                    renderInlineCursorFallback = false,
+                    renderInlineCursorFallback = true,
                     isBackdropOnly = false
                 )
-
-                Surface(
-                    onClick = { selectedTab = 0 },
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.88f),
-                    tonalElevation = 6.dp,
-                    modifier = Modifier
-                        .statusBarsPadding()
-                        .padding(top = 10.dp, start = 14.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            imageVector = DesktopIcons.Close,
-                            contentDescription = "Exit to Trackpad",
-                            modifier = Modifier.size(13.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = "Exit Desktop View",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                }
             }
         } else {
             Surface(
@@ -255,7 +252,12 @@ fun PhoneControllerScreen(
                         )
                         FilterChip(
                             selected = false,
-                            onClick = { selectedTab = 2 },
+                            onClick = {
+                                val intent = Intent(context, StandaloneDesktopActivity::class.java).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                                }
+                                context.startActivity(intent)
+                            },
                             leadingIcon = { Icon(DesktopIcons.DesktopView, null, Modifier.size(16.dp)) },
                             label = { Text("Desktop View (Fullscreen)") },
                             shape = RoundedCornerShape(50)
@@ -981,8 +983,8 @@ private fun SystemAndAdbSetupPane(
         }
 
         // scrcpy PC Integration Card
-        val scrcpyUsbCommand = "scrcpy --new-display=1920x1080/360 --keyboard=uhid --mouse=uhid"
-        val scrcpyWifiCommand = "scrcpy --tcpip=192.168.10.54:5555 --new-display=1920x1080/360 --keyboard=uhid --mouse=uhid"
+        val scrcpyUsbCommand = "scrcpy --new-display=1920x1080/280 --keyboard=uhid --mouse=uhid --stay-awake --window-title=\"DexXP - PC Desktop\""
+        val scrcpyWifiCommand = "scrcpy --tcpip=192.168.10.54:5555 --new-display=1920x1080/280 --keyboard=uhid --mouse=uhid --stay-awake --window-title=\"DexXP - PC Desktop\""
 
         Surface(
             shape = RoundedCornerShape(20.dp),
@@ -1012,7 +1014,7 @@ private fun SystemAndAdbSetupPane(
                 }
 
                 Text(
-                    text = "Launch DexXP as a standalone desktop window on your PC, Mac, or Linux without any physical monitor! Scrcpy streams a 1080p virtual display with full PC mouse and keyboard forwarding.",
+                    text = "Launch DexXP as a clean 1080p desktop window on your PC without phone status bars or navigation buttons! Supports full hardware mouse, wheel scrolling, and keyboard shortcuts.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1040,6 +1042,21 @@ private fun SystemAndAdbSetupPane(
                         Spacer(Modifier.width(6.dp))
                         Text("Copy Wi-Fi", style = MaterialTheme.typography.labelMedium)
                     }
+                }
+
+                Button(
+                    onClick = {
+                        val intent = Intent(context, StandaloneDesktopActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                        }
+                        context.startActivity(intent)
+                    },
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(DesktopIcons.DesktopView, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Launch Full Desktop Shell Now", style = MaterialTheme.typography.labelLarge)
                 }
 
                 Box(

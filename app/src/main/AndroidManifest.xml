@@ -106,6 +106,22 @@
             </intent-filter>
         </activity>
 
+        <!-- Layer-1 Fullscreen Immersive Standalone Desktop Activity (Direct PC / scrcpy Launcher) -->
+        <activity
+            android:name=".StandaloneDesktopActivity"
+            android:configChanges="density|fontScale|keyboard|keyboardHidden|layoutDirection|locale|mcc|mnc|navigation|orientation|screenLayout|screenSize|smallestScreenSize|touchscreen|uiMode"
+            android:excludeFromRecents="false"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:theme="@style/Theme.DexXP">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <!-- DisplayRouterService: Reacts to HDMI / USB-C DP Alt-Mode / Miracast -->
         <service
             android:name=".service.DisplayRouterService"
