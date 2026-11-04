@@ -1,6 +1,8 @@
 package com.dexxp.desktop.browser
 
 import android.annotation.SuppressLint
+import android.app.ActivityManager
+import android.app.ActivityOptions
 import android.content.Intent
 import android.graphics.Bitmap
 import android.hardware.display.DisplayManager
@@ -12,20 +14,25 @@ import android.view.Display
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.CookieManager
+import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,6 +57,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -57,10 +65,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -71,15 +80,19 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.dexxp.desktop.DexXpApplication
+import com.dexxp.desktop.model.WindowSnapMode
 import com.dexxp.desktop.ui.icons.DesktopIcons
 import com.dexxp.desktop.ui.theme.DexXPTheme
+import java.lang.ref.WeakReference
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * High-Performance Hardware-Accelerated Desktop Web App Container.
  *
- * Runs desktop web applications (such as YouTube Desktop, WhatsApp Web, Gmail)
- * using an authentic Linux Desktop Chrome User-Agent. Completely eliminates
- * mobile browser redirects, condensed phone layouts, and mobile app hijacking.
+ * Runs desktop web applications (CapCut Desktop Studio, YouTube Desktop, WhatsApp Web, Gmail)
+ * using an authentic 64-bit Windows 11 Chrome 130 User-Agent, HTTP Client Hints, and early
+ * `navigator.platform` / `navigator.userAgentData` spoofing with hardware-accelerated WebGL 2.0.
  */
 class DesktopWebActivity : ComponentActivity() {
 
@@ -89,6 +102,7 @@ class DesktopWebActivity : ComponentActivity() {
     private var onHideCustomVideoAction: (() -> Unit)? = null
     private var hostedDisplayId: Int = Display.INVALID_DISPLAY
     private var displayManager: DisplayManager? = null
+    private var recordPackageKey: String = "dexxp.webapp.browser"
 
     private val displayDisconnectListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = Unit
@@ -113,6 +127,9 @@ class DesktopWebActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Enforce hardware acceleration on the host Window for WebGL 2.0 & 60-120fps compositing
+        window.addFlags(WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED)
+
         hostedDisplayId = display?.displayId ?: Display.DEFAULT_DISPLAY
         if (hostedDisplayId != Display.DEFAULT_DISPLAY) {
             displayManager = getSystemService(DisplayManager::class.java)?.also { dm ->
@@ -128,13 +145,23 @@ class DesktopWebActivity : ComponentActivity() {
 
         val targetUrl = intent.getStringExtra(EXTRA_URL) ?: "https://www.youtube.com"
         val appTitle = intent.getStringExtra(EXTRA_TITLE) ?: "Desktop Web"
+        recordPackageKey = intent.getStringExtra(EXTRA_RECORD_KEY) ?: inferRecordKey(targetUrl)
+        activeInstances[recordPackageKey] = WeakReference(this)
+
+        val app = application as DexXpApplication
 
         setContent {
+            val runningWindows by app.sessionRepository.runningWindows.collectAsState()
+            val isMaximized = runningWindows
+                .firstOrNull { it.packageName == recordPackageKey }
+                ?.snapMode == WindowSnapMode.MAXIMIZED
+
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                 DexXPTheme(allowDynamicColorOnPhone = false) {
                     DesktopWebScreen(
                         initialUrl = targetUrl,
                         appTitle = appTitle,
+                        isMaximized = isMaximized,
                         onInitWebView = { wv ->
                             webView = wv
                             configureDesktopWebSettings(wv)
@@ -151,7 +178,22 @@ class DesktopWebActivity : ComponentActivity() {
                             customViewCallback?.onCustomViewHidden()
                             customViewCallback = null
                         },
-                        onClose = { finish() }
+                        onLaunchNativeCapCutLandscape = {
+                            val launched = app.appLauncher.launchNativeCapCutInLandscapeContainer(this@DesktopWebActivity)
+                            if (launched) {
+                                app.sessionRepository.removeWindowRecord(recordPackageKey)
+                                runCatching { finishAndRemoveTask() }.onFailure { finish() }
+                            }
+                        },
+                        onMinimize = {
+                            app.appLauncher.minimizeWindow(recordPackageKey, this@DesktopWebActivity)
+                        },
+                        onMaximizeOrRestore = {
+                            app.appLauncher.toggleMaximizeOrRestoreWindow(recordPackageKey, this@DesktopWebActivity)
+                        },
+                        onClose = {
+                            app.appLauncher.closeWindow(recordPackageKey, this@DesktopWebActivity)
+                        }
                     )
                 }
             }
@@ -161,34 +203,50 @@ class DesktopWebActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        intent.getStringExtra(EXTRA_RECORD_KEY)?.let { key ->
+            recordPackageKey = key
+            activeInstances[key] = WeakReference(this)
+        }
         val targetUrl = intent.getStringExtra(EXTRA_URL)
-        if (!targetUrl.isNullOrBlank()) {
-            webView?.loadUrl(targetUrl)
+        if (!targetUrl.isNullOrBlank() && webView?.url != targetUrl) {
+            webView?.let { wv ->
+                injectWindowsDesktopPlatformSpoof(wv)
+                wv.loadUrl(targetUrl, DESKTOP_CH_HEADERS)
+            }
         }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun configureDesktopWebSettings(wv: WebView) {
+        // Explicit hardware layer for WebGL 2.0 timeline & video shader acceleration
+        wv.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+
         wv.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
+            @Suppress("DEPRECATION")
             databaseEnabled = true
             useWideViewPort = true
             loadWithOverviewMode = true
+            loadsImagesAutomatically = true
             mediaPlaybackRequiresUserGesture = false
             allowFileAccess = true
             allowContentAccess = true
+            setSupportZoom(true)
+            builtInZoomControls = false
+            displayZoomControls = false
             setSupportMultipleWindows(false)
             javaScriptCanOpenWindowsAutomatically = true
             cacheMode = WebSettings.LOAD_DEFAULT
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-            // Authentic Linux x86_64 Desktop Chrome User-Agent: Guarantees full desktop UI rendering
+            // Authentic 64-bit Windows 11 Chrome 130 User-Agent (whitelisted by CapCut Online & desktop SaaS)
             userAgentString = DESKTOP_USER_AGENT
         }
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(wv, true)
         }
+        injectWindowsDesktopPlatformSpoof(wv)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -208,6 +266,7 @@ class DesktopWebActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        activeInstances[recordPackageKey] = WeakReference(this)
         webView?.onResume()
     }
 
@@ -218,6 +277,7 @@ class DesktopWebActivity : ComponentActivity() {
 
     private fun teardownOnSecondaryDisplayDisconnect() {
         if (isFinishing || isDestroyed) return
+        activeInstances.remove(recordPackageKey)
         runCatching {
             webView?.apply {
                 stopLoading()
@@ -229,6 +289,10 @@ class DesktopWebActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        val currentRef = activeInstances[recordPackageKey]?.get()
+        if (currentRef === this || currentRef == null) {
+            activeInstances.remove(recordPackageKey)
+        }
         runCatching { displayManager?.unregisterDisplayListener(displayDisconnectListener) }
         displayManager = null
         webView?.apply {
@@ -246,20 +310,155 @@ class DesktopWebActivity : ComponentActivity() {
     companion object {
         const val EXTRA_URL = "extra_desktop_web_url"
         const val EXTRA_TITLE = "extra_desktop_web_title"
+        const val EXTRA_RECORD_KEY = "extra_desktop_web_record_key"
 
         const val DESKTOP_USER_AGENT =
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+
+        val DESKTOP_CH_HEADERS: Map<String, String> = mapOf(
+            "Sec-CH-UA" to "\"Chromium\";v=\"130\", \"Google Chrome\";v=\"130\", \"Not?A_Brand\";v=\"99\"",
+            "Sec-CH-UA-Mobile" to "?0",
+            "Sec-CH-UA-Platform" to "\"Windows\"",
+            "Sec-CH-UA-Platform-Version" to "\"15.0.0\"",
+            "Sec-CH-UA-Arch" to "\"x86\"",
+            "Sec-CH-UA-Bitness" to "\"64\"",
+            "Sec-CH-UA-Full-Version-List" to "\"Chromium\";v=\"130.0.6723.117\", \"Google Chrome\";v=\"130.0.6723.117\", \"Not?A_Brand\";v=\"99.0.0.0\""
+        )
+
+        /**
+         * Client-side Windows 11 64-bit Chrome 130 platform spoofing script.
+         * Overrides `navigator.platform`, `navigator.maxTouchPoints`, and `navigator.userAgentData`
+         * (including `getHighEntropyValues` and `toJSON`) so CapCut Online and desktop web studios
+         * never detect `Linux armv8l` or `Android` touch metadata.
+         */
+        const val PLATFORM_SPOOF_JS: String = """
+            (function() {
+                try {
+                    Object.defineProperty(navigator, 'platform', { get: () => 'Win32', configurable: true });
+                    Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0, configurable: true });
+                    Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.', configurable: true });
+                    var uaBrands = [
+                        { brand: 'Chromium', version: '130' },
+                        { brand: 'Google Chrome', version: '130' },
+                        { brand: 'Not?A_Brand', version: '99' }
+                    ];
+                    var fullVersionBrands = [
+                        { brand: 'Chromium', version: '130.0.6723.117' },
+                        { brand: 'Google Chrome', version: '130.0.6723.117' },
+                        { brand: 'Not?A_Brand', version: '99.0.0.0' }
+                    ];
+                    var winUaData = {
+                        brands: uaBrands,
+                        mobile: false,
+                        platform: 'Windows',
+                        toJSON: function() {
+                            return { brands: uaBrands, mobile: false, platform: 'Windows' };
+                        },
+                        getHighEntropyValues: function(hints) {
+                            return Promise.resolve({
+                                brands: uaBrands,
+                                fullVersionList: fullVersionBrands,
+                                mobile: false,
+                                platform: 'Windows',
+                                platformVersion: '15.0.0',
+                                architecture: 'x86',
+                                bitness: '64',
+                                model: '',
+                                uaFullVersion: '130.0.6723.117',
+                                wow64: false
+                            });
+                        }
+                    };
+                    if (navigator.userAgentData || 'userAgentData' in navigator) {
+                        Object.defineProperty(navigator, 'userAgentData', {
+                            get: () => winUaData,
+                            configurable: true
+                        });
+                    } else if (typeof Navigator !== 'undefined' && Navigator.prototype) {
+                        Object.defineProperty(Navigator.prototype, 'userAgentData', {
+                            get: () => winUaData,
+                            configurable: true
+                        });
+                    }
+                } catch (e) {}
+            })();
+        """
+
+        private val activeInstances = ConcurrentHashMap<String, WeakReference<DesktopWebActivity>>()
+
+        fun injectWindowsDesktopPlatformSpoof(webView: WebView?) {
+            webView?.evaluateJavascript(PLATFORM_SPOOF_JS, null)
+        }
+
+        fun inferRecordKey(url: String): String = when {
+            url.contains("capcut", ignoreCase = true) -> "dexxp.webapp.capcut_web"
+            url.contains("whatsapp", ignoreCase = true) -> "dexxp.webapp.whatsapp_web"
+            url.contains("youtube", ignoreCase = true) -> "dexxp.webapp.youtube_desktop"
+            url.contains("mail.google", ignoreCase = true) -> "dexxp.webapp.gmail_web"
+            else -> "dexxp.webapp.browser"
+        }
+
+        fun minimizeByRecordKey(recordKey: String): Boolean {
+            val activity = activeInstances[recordKey]?.get() ?: return false
+            if (activity.isFinishing || activity.isDestroyed) return false
+            return runCatching { activity.moveTaskToBack(true) }.getOrDefault(false)
+        }
+
+        fun bringToFrontByRecordKey(recordKey: String, optionsBundle: Bundle? = null): Boolean {
+            val activity = activeInstances[recordKey]?.get() ?: return false
+            if (activity.isFinishing || activity.isDestroyed) return false
+            val am = activity.getSystemService(ActivityManager::class.java) ?: return false
+            return runCatching {
+                if (optionsBundle != null) {
+                    am.moveTaskToFront(activity.taskId, ActivityManager.MOVE_TASK_WITH_HOME, optionsBundle)
+                } else {
+                    am.moveTaskToFront(activity.taskId, ActivityManager.MOVE_TASK_WITH_HOME)
+                }
+                true
+            }.getOrDefault(false)
+        }
+
+        fun finishByRecordKey(recordKey: String): Boolean {
+            val activity = activeInstances.remove(recordKey)?.get() ?: return false
+            if (activity.isFinishing || activity.isDestroyed) return false
+            activity.runOnUiThread {
+                runCatching { activity.finishAndRemoveTask() }.onFailure { activity.finish() }
+            }
+            return true
+        }
+
+        fun finishAllSecondaryInstances() {
+            val entries = activeInstances.entries.toList()
+            activeInstances.clear()
+            for ((_, ref) in entries) {
+                val activity = ref.get() ?: continue
+                if (activity.hostedDisplayId != Display.DEFAULT_DISPLAY &&
+                    !activity.isFinishing && !activity.isDestroyed
+                ) {
+                    activity.runOnUiThread {
+                        activity.teardownOnSecondaryDisplayDisconnect()
+                    }
+                }
+            }
+        }
     }
 }
+
+private val TopBarButtonShape = RoundedCornerShape(8.dp)
+private val TopBarPillShape = RoundedCornerShape(50)
 
 @Composable
 private fun DesktopWebScreen(
     initialUrl: String,
     appTitle: String,
+    isMaximized: Boolean,
     onInitWebView: (WebView) -> Unit,
     onRegisterCustomVideoHandlers: (onHide: () -> Unit) -> Unit,
     onCustomVideoShown: (View, WebChromeClient.CustomViewCallback) -> Unit,
     onCustomVideoHidden: () -> Unit,
+    onLaunchNativeCapCutLandscape: () -> Unit,
+    onMinimize: () -> Unit,
+    onMaximizeOrRestore: () -> Unit,
     onClose: () -> Unit
 ) {
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
@@ -287,38 +486,39 @@ private fun DesktopWebScreen(
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.surface)
         ) {
-            // Material 3 Desktop Top Bar
+            // Material 3 Desktop Top Bar with Navigation, CapCut 16:10 Native Fallback & [—] [□] [X] Controls
             Surface(
                 tonalElevation = 2.dp,
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(48.dp)
+                    .height(44.dp)
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 12.dp),
+                        .padding(start = 10.dp, end = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     // Navigation actions: Back, Forward, Refresh, Title
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        modifier = Modifier.weight(1f, fill = false)
                     ) {
                         FilledTonalIconButton(
                             onClick = { webViewRef?.goBack() },
                             enabled = canGoBack,
                             shape = CircleShape,
                             modifier = Modifier
-                                .size(34.dp)
+                                .size(32.dp)
                                 .pointerHoverIcon(PointerIcon.Hand),
                             colors = IconButtonDefaults.filledTonalIconButtonColors(
                                 containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
                             )
                         ) {
-                            Icon(DesktopIcons.ArrowLeft, contentDescription = "Back", modifier = Modifier.size(18.dp))
+                            Icon(DesktopIcons.ArrowLeft, contentDescription = "Back", modifier = Modifier.size(17.dp))
                         }
 
                         FilledTonalIconButton(
@@ -326,29 +526,30 @@ private fun DesktopWebScreen(
                             enabled = canGoForward,
                             shape = CircleShape,
                             modifier = Modifier
-                                .size(34.dp)
+                                .size(32.dp)
                                 .pointerHoverIcon(PointerIcon.Hand),
                             colors = IconButtonDefaults.filledTonalIconButtonColors(
                                 containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
                             )
                         ) {
-                            Icon(DesktopIcons.ArrowRight, contentDescription = "Forward", modifier = Modifier.size(18.dp))
+                            Icon(DesktopIcons.ArrowRight, contentDescription = "Forward", modifier = Modifier.size(17.dp))
                         }
 
                         FilledTonalIconButton(
                             onClick = {
                                 hasError = false
+                                DesktopWebActivity.injectWindowsDesktopPlatformSpoof(webViewRef)
                                 webViewRef?.reload()
                             },
                             shape = CircleShape,
                             modifier = Modifier
-                                .size(34.dp)
+                                .size(32.dp)
                                 .pointerHoverIcon(PointerIcon.Hand),
                             colors = IconButtonDefaults.filledTonalIconButtonColors(
                                 containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
                             )
                         ) {
-                            Icon(DesktopIcons.Maximize, contentDescription = "Reload", modifier = Modifier.size(16.dp))
+                            Icon(DesktopIcons.Maximize, contentDescription = "Reload", modifier = Modifier.size(15.dp))
                         }
 
                         Spacer(modifier = Modifier.width(8.dp))
@@ -360,73 +561,103 @@ private fun DesktopWebScreen(
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.width(360.dp)
+                            modifier = Modifier.width(340.dp)
                         )
                     }
 
-                    // Desktop Badge & Close
+                    // Right Cluster: Native CapCut 16:10 Fallback, Desktop Engine Badge, & Window Controls [—] [□] [X]
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        val isCapCut = currentUrl.contains("capcut") || currentTitle.contains("CapCut", ignoreCase = true)
+                        val isCapCut = currentUrl.contains("capcut", ignoreCase = true) ||
+                            currentTitle.contains("CapCut", ignoreCase = true)
                         if (isCapCut) {
-                            val localCtx = LocalContext.current
+                            val mobileBtnHover = remember { MutableInteractionSource() }
+                            val isMobileBtnHovered by mobileBtnHover.collectIsHoveredAsState()
                             Surface(
-                                onClick = {
-                                    val pm = localCtx.packageManager
-                                    val nativeIntent = pm.getLaunchIntentForPackage("com.lemon.lvoverseas")
-                                        ?: pm.getLaunchIntentForPackage("com.capcut.editor")
-                                    if (nativeIntent != null) {
-                                        nativeIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                        localCtx.startActivity(nativeIntent)
-                                    }
+                                onClick = onLaunchNativeCapCutLandscape,
+                                shape = TopBarPillShape,
+                                color = if (isMobileBtnHovered) {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.secondaryContainer
                                 },
-                                shape = RoundedCornerShape(50),
-                                color = MaterialTheme.colorScheme.secondaryContainer,
-                                modifier = Modifier.height(28.dp)
+                                modifier = Modifier
+                                    .height(28.dp)
+                                    .hoverable(mobileBtnHover)
+                                    .pointerHoverIcon(PointerIcon.Hand)
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
                                 ) {
+                                    Icon(
+                                        imageVector = DesktopIcons.AspectLandscape,
+                                        contentDescription = null,
+                                        tint = if (isMobileBtnHovered) {
+                                            MaterialTheme.colorScheme.onPrimaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.onSecondaryContainer
+                                        },
+                                        modifier = Modifier.size(14.dp)
+                                    )
                                     Text(
-                                        text = "Mobile App",
+                                        text = "Mobile App (16:10)",
                                         style = MaterialTheme.typography.labelSmall,
                                         fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                        color = if (isMobileBtnHovered) {
+                                            MaterialTheme.colorScheme.onPrimaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.onSecondaryContainer
+                                        }
                                     )
                                 }
                             }
                         }
 
                         Surface(
-                            shape = RoundedCornerShape(50),
+                            shape = TopBarPillShape,
                             color = MaterialTheme.colorScheme.primaryContainer,
-                            modifier = Modifier.padding(end = 4.dp)
+                            modifier = Modifier.padding(end = 2.dp)
                         ) {
                             Text(
-                                text = "DESKTOP ENGINE",
+                                text = "WIN11 CHROME 130",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                             )
                         }
 
-                        FilledTonalIconButton(
-                            onClick = onClose,
-                            shape = CircleShape,
-                            modifier = Modifier
-                                .size(34.dp)
-                                .pointerHoverIcon(PointerIcon.Hand),
-                            colors = IconButtonDefaults.filledTonalIconButtonColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer,
-                                contentColor = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                        ) {
-                            Icon(DesktopIcons.Close, contentDescription = "Close", modifier = Modifier.size(16.dp))
-                        }
+                        // Minimize [—]
+                        WebWindowControlIcon(
+                            icon = DesktopIcons.Minimize,
+                            contentDescription = "Minimize Window",
+                            hoverColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            iconTint = MaterialTheme.colorScheme.onSurface,
+                            onClick = onMinimize
+                        )
+
+                        // Maximize / Container Toggle [□]
+                        WebWindowControlIcon(
+                            icon = if (isMaximized) DesktopIcons.RestoreWindow else DesktopIcons.Maximize,
+                            contentDescription = "Toggle Container / Fullscreen",
+                            hoverColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            iconTint = MaterialTheme.colorScheme.onSurface,
+                            onClick = onMaximizeOrRestore
+                        )
+
+                        // Close [X] (Red Hover)
+                        WebWindowControlIcon(
+                            icon = DesktopIcons.Close,
+                            contentDescription = "Close Window",
+                            hoverColor = Color(0xFFD93025),
+                            iconTint = MaterialTheme.colorScheme.onSurface,
+                            hoverIconTint = Color.White,
+                            onClick = onClose
+                        )
                     }
                 }
             }
@@ -460,17 +691,35 @@ private fun DesktopWebScreen(
                             isFocusable = true
                             isFocusableInTouchMode = true
 
+                            var didRecoverIncompatibilityRedirect = false
+                            var injectedEarlyOnCurrentNav = false
+
                             webViewClient = object : WebViewClient() {
                                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                                     val uri = request?.url ?: return false
                                     val scheme = uri.scheme
+                                    val uriStr = uri.toString()
+
                                     if (scheme == "http" || scheme == "https") {
-                                        // Keep all browsing strictly inside the desktop WebView!
+                                        // Guard against stale cached redirects to capcut.com/incompatibility
+                                        if (uriStr.contains("capcut.com/incompatibility", ignoreCase = true) &&
+                                            !didRecoverIncompatibilityRedirect
+                                        ) {
+                                            didRecoverIncompatibilityRedirect = true
+                                            DesktopWebActivity.injectWindowsDesktopPlatformSpoof(view)
+                                            view?.loadUrl("https://www.capcut.com/my-edit", DesktopWebActivity.DESKTOP_CH_HEADERS)
+                                            return true
+                                        }
+                                        DesktopWebActivity.injectWindowsDesktopPlatformSpoof(view)
                                         return false
                                     }
-                                    val uriStr = uri.toString()
-                                    // Block deep-link bounces to CapCut mobile app or other video editors so web studio remains in desktop 16:9
-                                    if (uriStr.contains("lemon") || uriStr.contains("lvoverseas") || uriStr.contains("capcut") || scheme?.startsWith("snssdk") == true) {
+
+                                    // Block deep-link bounces to CapCut mobile app so web studio remains in 16:9 desktop mode
+                                    if (uriStr.contains("lemon") ||
+                                        uriStr.contains("lvoverseas") ||
+                                        uriStr.contains("capcut") ||
+                                        scheme?.startsWith("snssdk") == true
+                                    ) {
                                         return true
                                     }
                                     return runCatching {
@@ -481,6 +730,8 @@ private fun DesktopWebScreen(
                                 }
 
                                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                    injectedEarlyOnCurrentNav = false
+                                    DesktopWebActivity.injectWindowsDesktopPlatformSpoof(view)
                                     isLoading = true
                                     hasError = false
                                     canGoBack = view?.canGoBack() == true
@@ -488,7 +739,19 @@ private fun DesktopWebScreen(
                                     if (!url.isNullOrBlank()) currentUrl = url
                                 }
 
+                                override fun onLoadResource(view: WebView?, url: String?) {
+                                    if (!injectedEarlyOnCurrentNav) {
+                                        injectedEarlyOnCurrentNav = true
+                                        DesktopWebActivity.injectWindowsDesktopPlatformSpoof(view)
+                                    }
+                                }
+
+                                override fun onPageCommitVisible(view: WebView?, url: String?) {
+                                    DesktopWebActivity.injectWindowsDesktopPlatformSpoof(view)
+                                }
+
                                 override fun onPageFinished(view: WebView?, url: String?) {
+                                    DesktopWebActivity.injectWindowsDesktopPlatformSpoof(view)
                                     isLoading = false
                                     canGoBack = view?.canGoBack() == true
                                     canGoForward = view?.canGoForward() == true
@@ -512,6 +775,9 @@ private fun DesktopWebScreen(
 
                             webChromeClient = object : WebChromeClient() {
                                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                                    if (newProgress <= 30) {
+                                        DesktopWebActivity.injectWindowsDesktopPlatformSpoof(view)
+                                    }
                                     progress = newProgress / 100f
                                     if (newProgress >= 100) isLoading = false
                                 }
@@ -519,6 +785,12 @@ private fun DesktopWebScreen(
                                 override fun onReceivedTitle(view: WebView?, title: String?) {
                                     if (!title.isNullOrBlank()) {
                                         currentTitle = title
+                                    }
+                                }
+
+                                override fun onPermissionRequest(request: PermissionRequest?) {
+                                    request?.let { req ->
+                                        runCatching { req.grant(req.resources) }
                                     }
                                 }
 
@@ -536,7 +808,7 @@ private fun DesktopWebScreen(
 
                             onInitWebView(this)
                             webViewRef = this
-                            loadUrl(initialUrl)
+                            loadUrl(initialUrl, DesktopWebActivity.DESKTOP_CH_HEADERS)
                         }
                     }
                 )
@@ -586,12 +858,13 @@ private fun DesktopWebScreen(
                                 Button(
                                     onClick = {
                                         hasError = false
+                                        DesktopWebActivity.injectWindowsDesktopPlatformSpoof(webViewRef)
                                         webViewRef?.reload()
                                     },
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = MaterialTheme.colorScheme.primary
                                     ),
-                                    shape = RoundedCornerShape(50)
+                                    shape = TopBarPillShape
                                 ) {
                                     Text("Retry Connection")
                                 }
@@ -611,5 +884,36 @@ private fun DesktopWebScreen(
                     .background(Color.Black)
             )
         }
+    }
+}
+
+@Composable
+private fun WebWindowControlIcon(
+    icon: ImageVector,
+    contentDescription: String,
+    hoverColor: Color,
+    iconTint: Color,
+    hoverIconTint: Color = iconTint,
+    onClick: () -> Unit
+) {
+    val hoverSource = remember { MutableInteractionSource() }
+    val isHovered by hoverSource.collectIsHoveredAsState()
+
+    Box(
+        modifier = Modifier
+            .size(width = 32.dp, height = 28.dp)
+            .clip(TopBarButtonShape)
+            .hoverable(hoverSource)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .background(if (isHovered) hoverColor else Color.Transparent)
+            .clickable(interactionSource = hoverSource, indication = null) { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (isHovered) hoverIconTint else iconTint,
+            modifier = Modifier.size(15.dp)
+        )
     }
 }

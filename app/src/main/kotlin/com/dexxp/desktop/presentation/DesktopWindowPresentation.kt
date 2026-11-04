@@ -3,6 +3,7 @@ package com.dexxp.desktop.presentation
 import android.app.Presentation
 import android.content.Context
 import android.graphics.Color
+import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
@@ -290,6 +291,7 @@ class DesktopWindowPresentation(
 
     private fun configureExternalWindow(win: Window) {
         win.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        win.decorView.setBackgroundColor(Color.TRANSPARENT)
         win.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
         win.addFlags(
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
@@ -300,11 +302,13 @@ class DesktopWindowPresentation(
         )
 
         val bestMode = selectOptimalDisplayMode(display)
+        val attrs = win.attributes
+        attrs.format = PixelFormat.TRANSLUCENT
+        attrs.dimAmount = 0f
         if (bestMode != null) {
-            val attrs = win.attributes
             attrs.preferredDisplayModeId = bestMode.modeId
-            win.attributes = attrs
         }
+        win.attributes = attrs
 
         WindowCompat.setDecorFitsSystemWindows(win, false)
         WindowInsetsControllerCompat(win, win.decorView).apply {

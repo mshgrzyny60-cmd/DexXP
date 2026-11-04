@@ -125,13 +125,14 @@
             </intent-filter>
         </activity>
 
-        <!-- Standalone Desktop Web Browser & WebApp Container (YouTube Desktop, WhatsApp Web, etc.) -->
+        <!-- Standalone Desktop Web Browser & WebApp Container (CapCut Desktop Studio, YouTube Desktop, WhatsApp Web, etc.) -->
         <activity
             android:name=".browser.DesktopWebActivity"
             android:configChanges="density|fontScale|keyboard|keyboardHidden|layoutDirection|locale|mcc|mnc|navigation|orientation|screenLayout|screenSize|smallestScreenSize|touchscreen|uiMode"
-            android:exported="false"
-            android:launchMode="standard"
             android:documentLaunchMode="intoExisting"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:launchMode="standard"
             android:resizeableActivity="true"
             android:theme="@style/Theme.DexXP" />
 

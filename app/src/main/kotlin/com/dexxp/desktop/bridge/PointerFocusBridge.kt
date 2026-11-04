@@ -1,5 +1,7 @@
 package com.dexxp.desktop.bridge
 
+import android.graphics.Color
+import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.SystemClock
 import android.view.Gravity
@@ -216,10 +218,10 @@ class PointerFocusBridge(
                 Triple(0, 0, Gravity.TOP or Gravity.START)
             }
             mode == ShellSurfaceMode.DOCKED_TASKBAR -> {
-                Triple(WindowManager.LayoutParams.MATCH_PARENT, taskbarHeightPx, Gravity.BOTTOM or Gravity.START)
+                Triple(WindowManager.LayoutParams.MATCH_PARENT, taskbarHeightPx, Gravity.BOTTOM)
             }
             else -> {
-                Triple(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, Gravity.BOTTOM or Gravity.START)
+                Triple(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, Gravity.BOTTOM)
             }
         }
 
@@ -228,6 +230,7 @@ class PointerFocusBridge(
         val prevHeight = lp.height
         val prevGravity = lp.gravity
         val prevFlags = lp.flags
+        val prevFormat = lp.format
 
         var flags = prevFlags
         flags = flags or
@@ -262,6 +265,9 @@ class PointerFocusBridge(
             flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
         }
 
+        window.setBackgroundDrawableResource(android.R.color.transparent)
+        decorView.setBackgroundColor(Color.TRANSPARENT)
+
         if (isTvMode && hasActiveApp) {
             decorView.visibility = View.GONE
         } else {
@@ -272,6 +278,8 @@ class PointerFocusBridge(
             prevHeight != targetHeight ||
             prevGravity != targetGravity ||
             prevFlags != flags ||
+            prevFormat != PixelFormat.TRANSLUCENT ||
+            lp.dimAmount != 0f ||
             lp.x != 0 ||
             lp.y != 0
 
@@ -281,6 +289,8 @@ class PointerFocusBridge(
             lp.gravity = targetGravity
             lp.x = 0
             lp.y = 0
+            lp.format = PixelFormat.TRANSLUCENT
+            lp.dimAmount = 0f
             lp.flags = flags
             window.attributes = lp
             if (decorView.isAttachedToWindow) {

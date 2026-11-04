@@ -1,6 +1,7 @@
 package com.dexxp.desktop
 
 import android.content.pm.ActivityInfo
+import com.dexxp.desktop.browser.DesktopWebActivity
 import com.dexxp.desktop.clipboard.DesktopClipboardManager
 import com.dexxp.desktop.command.CommandPaletteController
 import com.dexxp.desktop.continuity.PhoneHubController
@@ -14,6 +15,7 @@ import com.dexxp.desktop.model.WindowSnapMode
 import com.dexxp.desktop.system.SystemFlagsInspector
 import com.dexxp.desktop.terminal.DesktopTerminalLauncher
 import com.dexxp.desktop.windowing.WindowSnappingController
+import com.dexxp.desktop.windowing.WindowTitlebarOverlayController
 import com.dexxp.desktop.workspace.VirtualWorkspaceManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -269,5 +271,30 @@ class DesktopDpiAndBoundsTest {
         assertFalse(AppRepository.isPortraitLockedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE))
         assertFalse(AppRepository.isPortraitLockedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_USER))
         assertFalse(AppRepository.isPortraitLockedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR))
+    }
+
+    @Test
+    fun `desktop web studio user agent client hints and JS spoof emulate 64-bit Windows 11 Chrome 130`() {
+        val ua = DesktopWebActivity.DESKTOP_USER_AGENT
+        assertTrue(ua.contains("Windows NT 10.0; Win64; x64"))
+        assertTrue(ua.contains("Chrome/130.0.0.0"))
+        assertFalse(ua.contains("Linux", ignoreCase = true))
+        assertFalse(ua.contains("Android", ignoreCase = true))
+
+        assertEquals("\"Windows\"", DesktopWebActivity.DESKTOP_CH_HEADERS["Sec-CH-UA-Platform"])
+        assertEquals("?0", DesktopWebActivity.DESKTOP_CH_HEADERS["Sec-CH-UA-Mobile"])
+        assertEquals("\"64\"", DesktopWebActivity.DESKTOP_CH_HEADERS["Sec-CH-UA-Bitness"])
+
+        val js = DesktopWebActivity.PLATFORM_SPOOF_JS
+        assertTrue(js.contains("'Win32'"))
+        assertTrue(js.contains("maxTouchPoints"))
+        assertTrue(js.contains("'Windows'"))
+        assertTrue(js.contains("getHighEntropyValues"))
+
+        assertEquals("dexxp.webapp.capcut_web", DesktopWebActivity.inferRecordKey("https://www.capcut.com/editor"))
+        assertEquals("dexxp.webapp.whatsapp_web", DesktopWebActivity.inferRecordKey("https://web.whatsapp.com/"))
+        assertEquals("dexxp.webapp.youtube_desktop", DesktopWebActivity.inferRecordKey("https://www.youtube.com/watch?v=1"))
+        assertEquals(28, WindowTitlebarOverlayController.TITLEBAR_HEIGHT_DP)
+        assertEquals(336, WindowTitlebarOverlayController.MAXIMIZED_PILL_WIDTH_DP)
     }
 }

@@ -111,15 +111,21 @@ class DesktopBrowserLauncher(
         launchContext: Context? = null
     ): Boolean {
         val displayInfo = sessionRepository.activeDisplay.value
+        val recordKey = "dexxp.webapp.${webApp.id}"
         val intent = Intent(appContext, DesktopWebActivity::class.java).apply {
             putExtra(DesktopWebActivity.EXTRA_URL, webApp.desktopUrl)
             putExtra(DesktopWebActivity.EXTRA_TITLE, webApp.title)
+            putExtra(DesktopWebActivity.EXTRA_RECORD_KEY, recordKey)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
         }
-        val bounds = Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+        val bounds = if (snapMode.usesFreeformContainer) {
+            computeDesktopViewportBounds(displayInfo, snapMode)
+        } else {
+            Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+        }
         return appLauncher.launchCustomIntentInFreeform(
             intent = intent,
-            recordPackageKey = "dexxp.webapp.${webApp.id}",
+            recordPackageKey = recordKey,
             label = webApp.title,
             customBounds = bounds,
             snapMode = snapMode,
@@ -162,7 +168,7 @@ class DesktopBrowserLauncher(
     ): Intent {
         val headers = Bundle().apply {
             putString("Sec-CH-UA-Mobile", "?0")
-            putString("Sec-CH-UA-Platform", "\"Linux\"")
+            putString("Sec-CH-UA-Platform", "\"Windows\"")
             putString("Upgrade-Insecure-Requests", "1")
         }
 

@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyHorizontalGrid
@@ -75,6 +76,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalContext
@@ -324,7 +326,7 @@ fun DesktopWorkspaceRoot(
                         appLauncher.launchOrFocusPackage(pkg, snap, context)
                     },
                     onMinimizePackage = { pkg ->
-                        appLauncher.toggleMinimizeWindow(pkg, context)
+                        appLauncher.minimizeWindow(pkg, context)
                     },
                     onCloseWindow = { pkg ->
                         appLauncher.closeWindow(pkg, context)
@@ -783,7 +785,7 @@ fun DesktopWorkspaceRoot(
                             appLauncher.launchOrFocusPackage(pkg, snap, context)
                         },
                         onMinimizePackage = { pkg ->
-                            appLauncher.toggleMinimizeWindow(pkg, context)
+                            appLauncher.minimizeWindow(pkg, context)
                         },
                         onCloseWindow = { pkg ->
                             appLauncher.closeWindow(pkg, context)
@@ -1090,11 +1092,14 @@ private fun DesktopTaskbar(
 ) {
     val context = LocalContext.current
 
-    val dockEntries by remember(apps, pinnedPackages, runningWindows) {
+    val appsByPkg = remember(apps) {
+        HashMap<String, DesktopAppItem>(apps.size).apply {
+            apps.forEach { putIfAbsent(it.packageName, it) }
+        }
+    }
+
+    val dockEntries by remember(appsByPkg, pinnedPackages, runningWindows, isShowDesktopActive) {
         derivedStateOf {
-            val appsByPkg = HashMap<String, DesktopAppItem>(apps.size).apply {
-                apps.forEach { putIfAbsent(it.packageName, it) }
-            }
             val runningByPkg = runningWindows.associateBy { it.packageName }
             val orderedPackages = LinkedHashSet<String>().apply {
                 pinnedPackages.forEach { add(it) }
@@ -1111,7 +1116,7 @@ private fun DesktopTaskbar(
                         label = app?.label ?: running?.label ?: pkg.substringAfterLast('.'),
                         iconBitmap = app?.iconBitmap,
                         isRunning = running != null,
-                        isFocused = running?.isFocused == true && !running.isMinimized,
+                        isFocused = !isShowDesktopActive && running?.isFocused == true && !running.isMinimized,
                         isMinimized = running?.isMinimized == true,
                         isPinned = pkg in pinnedPackages
                     )
@@ -1150,7 +1155,10 @@ private fun DesktopTaskbar(
                     },
                     modifier = Modifier
                         .size(40.dp)
-                        .scale(startScale)
+                        .graphicsLayer {
+                            scaleX = startScale
+                            scaleY = startScale
+                        }
                         .hoverable(startHover)
                         .pointerHoverIcon(PointerIcon.Hand)
                 ) {
@@ -1615,7 +1623,10 @@ private fun TaskbarUtilityIconButton(
         color = bgColor,
         modifier = Modifier
             .size(38.dp)
-            .scale(scale)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .hoverable(hoverSource)
             .pointerHoverIcon(PointerIcon.Hand)
     ) {
@@ -1644,6 +1655,10 @@ private data class DockAppEntry(
     val isPinned: Boolean
 )
 
+private val TaskbarPillShape = RoundedCornerShape(12.dp)
+private val TaskbarIconClipShape = RoundedCornerShape(6.dp)
+private val TaskbarCloseHoverRed = Color(0xFFD93025)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TaskbarAppButton(
@@ -1661,7 +1676,7 @@ private fun TaskbarAppButton(
 
     val scale by animateFloatAsState(
         targetValue = when {
-            isHovered -> 1.06f
+            isHovered -> 1.05f
             entry.isMinimized -> 0.96f
             else -> 1.0f
         },
@@ -1704,8 +1719,11 @@ private fun TaskbarAppButton(
         Column(
             modifier = Modifier
                 .height(42.dp)
-                .scale(scale)
-                .clip(RoundedCornerShape(12.dp))
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }
+                .clip(TaskbarPillShape)
                 .hoverable(interactionSource)
                 .pointerHoverIcon(PointerIcon.Hand)
                 .background(animatedBg)
@@ -1714,12 +1732,14 @@ private fun TaskbarAppButton(
                     onClick = onClick,
                     onLongClick = { menuOpen = true }
                 )
-                .padding(horizontal = 10.dp),
+                .padding(start = 10.dp, end = if (entry.isRunning) 6.dp else 10.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Row(
-                modifier = Modifier.offset(y = iconOffsetY),
+                modifier = Modifier.graphicsLayer {
+                    translationY = iconOffsetY.toPx()
+                },
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (entry.iconBitmap != null) {
@@ -1728,14 +1748,14 @@ private fun TaskbarAppButton(
                         contentDescription = entry.label,
                         modifier = Modifier
                             .size(24.dp)
-                            .alpha(iconAlpha)
-                            .clip(RoundedCornerShape(6.dp))
+                            .graphicsLayer { alpha = iconAlpha }
+                            .clip(TaskbarIconClipShape)
                     )
                 } else {
                     Box(
                         modifier = Modifier
                             .size(24.dp)
-                            .alpha(iconAlpha)
+                            .graphicsLayer { alpha = iconAlpha }
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primaryContainer),
                         contentAlignment = Alignment.Center
@@ -1759,8 +1779,44 @@ private fun TaskbarAppButton(
                             MaterialTheme.colorScheme.onSurface
                         },
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 140.dp)
                     )
+                    Spacer(modifier = Modifier.width(5.dp))
+                    // Inline 1-Click Close [X] Button directly on Running Taskbar Items
+                    val closeHover = remember { MutableInteractionSource() }
+                    val isCloseHovered by closeHover.collectIsHoveredAsState()
+                    Box(
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clip(CircleShape)
+                            .hoverable(closeHover)
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .background(
+                                when {
+                                    isCloseHovered -> TaskbarCloseHoverRed
+                                    isHovered -> MaterialTheme.colorScheme.surfaceContainerHighest
+                                    else -> Color.Transparent
+                                }
+                            )
+                            .clickable(
+                                interactionSource = closeHover,
+                                indication = null,
+                                onClick = onCloseRecord
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = DesktopIcons.Close,
+                            contentDescription = "Close ${entry.label}",
+                            tint = when {
+                                isCloseHovered -> Color.White
+                                isHovered || entry.isFocused -> MaterialTheme.colorScheme.onSurfaceVariant
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                            },
+                            modifier = Modifier.size(11.dp)
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(3.dp))

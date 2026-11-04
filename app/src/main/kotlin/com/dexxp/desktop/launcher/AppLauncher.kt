@@ -12,9 +12,9 @@ import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import android.view.Display
-import com.dexxp.desktop.SecondaryDesktopActivity
 import com.dexxp.desktop.StandaloneDesktopActivity
 import com.dexxp.desktop.bridge.DesktopPointerAccessibilityService
+import com.dexxp.desktop.browser.DesktopWebActivity
 import com.dexxp.desktop.model.AppWindowLaunchPolicy
 import com.dexxp.desktop.model.DesktopAppItem
 import com.dexxp.desktop.model.DesktopEnvironmentMode
@@ -27,7 +27,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.lang.reflect.Method
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
@@ -47,12 +46,6 @@ class AppLauncher(
     private val cascadeCounter = AtomicInteger(0)
     private val rememberedBounds = ConcurrentHashMap<String, Rect>()
 
-    private val setLaunchWindowingModeMethod: Method? by lazy {
-        runCatching {
-            ActivityOptions::class.java.getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)
-        }.getOrNull()
-    }
-
     fun launchApp(
         app: DesktopAppItem,
         snapMode: WindowSnapMode? = null,
@@ -60,6 +53,9 @@ class AppLauncher(
         launchContext: Context? = null
     ): Boolean {
         if (app.packageName == "com.lemon.lvoverseas" || app.packageName == "com.capcut.editor") {
+            if (snapMode == WindowSnapMode.LANDSCAPE_CONTAINER || snapMode == WindowSnapMode.PORTRAIT_CONTAINER) {
+                return launchAppInternal(app, snapMode, newInstance, launchContext)
+            }
             return launchCapCutDesktopStudio(snapMode ?: WindowSnapMode.MAXIMIZED, launchContext)
         }
         return launchAppInternal(app, snapMode, newInstance, launchContext)
@@ -95,20 +91,81 @@ class AppLauncher(
             am?.killBackgroundProcesses("com.capcut.editor")
         }
         val displayInfo = sessionRepository.activeDisplay.value
-        val intent = Intent(appContext, com.dexxp.desktop.browser.DesktopWebActivity::class.java).apply {
-            putExtra(com.dexxp.desktop.browser.DesktopWebActivity.EXTRA_URL, "https://www.capcut.com/editor")
-            putExtra(com.dexxp.desktop.browser.DesktopWebActivity.EXTRA_TITLE, "CapCut Desktop Studio")
+        val recordKey = "dexxp.webapp.capcut_web"
+        val intent = Intent(appContext, DesktopWebActivity::class.java).apply {
+            putExtra(DesktopWebActivity.EXTRA_URL, "https://www.capcut.com/editor")
+            putExtra(DesktopWebActivity.EXTRA_TITLE, "CapCut Desktop Studio")
+            putExtra(DesktopWebActivity.EXTRA_RECORD_KEY, recordKey)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
         }
-        val bounds = Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+        val bounds = if (snapMode.usesFreeformContainer) {
+            computeWindowBounds(recordKey, displayInfo, snapMode)
+        } else {
+            Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+        }
         return launchCustomIntentInFreeform(
             intent = intent,
-            recordPackageKey = "dexxp.webapp.capcut_web",
+            recordPackageKey = recordKey,
             label = "CapCut Desktop Studio",
             customBounds = bounds,
             snapMode = snapMode,
             launchContext = launchContext
         )
+    }
+
+    /**
+     * High-performance native fallback from CapCut Desktop Studio (`DesktopWebActivity`):
+     * launches the installed native CapCut Android editor (`com.lemon.lvoverseas` / `com.capcut.editor`)
+     * directly inside a `16:10` `WindowSnapMode.LANDSCAPE_CONTAINER` on the secondary display.
+     */
+    fun launchNativeCapCutInLandscapeContainer(launchContext: Context? = null): Boolean {
+        val catalogItem = appRepository.findByPackage("com.lemon.lvoverseas")
+            ?: appRepository.findByPackage("com.capcut.editor")
+        if (catalogItem != null) {
+            return launchAppInternal(
+                app = catalogItem,
+                snapMode = WindowSnapMode.LANDSCAPE_CONTAINER,
+                newInstance = false,
+                launchContext = launchContext
+            )
+        }
+
+        val pm = appContext.packageManager
+        val (targetPkg, launchIntent) = pm.getLaunchIntentForPackage("com.lemon.lvoverseas")
+            ?.let { "com.lemon.lvoverseas" to it }
+            ?: pm.getLaunchIntentForPackage("com.capcut.editor")
+                ?.let { "com.capcut.editor" to it }
+            ?: return false
+
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        val displayInfo = sessionRepository.activeDisplay.value
+        val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
+        val bounds = computeWindowBounds(targetPkg, displayInfo, WindowSnapMode.LANDSCAPE_CONTAINER)
+        val optionsBundle = buildLaunchActivityOptions(
+            targetDisplayId = targetDisplayId,
+            isTvMode = false,
+            launchBounds = bounds,
+            useFreeformWindowing = true
+        )
+        val launched = dispatchActivityIntent(
+            context = launchContext ?: appContext,
+            intent = launchIntent,
+            optionsBundle = optionsBundle,
+            targetDisplayId = targetDisplayId,
+            targetPackage = targetPkg
+        )
+        if (launched) {
+            sessionRepository.setShowDesktop(false)
+            sessionRepository.recordWindowLaunched(
+                packageName = targetPkg,
+                activityName = launchIntent.component?.className.orEmpty(),
+                label = "CapCut",
+                bounds = bounds,
+                snapMode = WindowSnapMode.LANDSCAPE_CONTAINER,
+                displayId = targetDisplayId
+            )
+        }
+        return launched
     }
 
     private fun launchAppInternal(
@@ -247,20 +304,95 @@ class AppLauncher(
         return launched
     }
 
+    private fun buildDesktopWebIntentForRecordKey(
+        recordKey: String,
+        fallbackLabel: String?
+    ): Pair<Intent, String> {
+        val (url, defaultTitle) = when (recordKey) {
+            "dexxp.webapp.capcut_web" -> "https://www.capcut.com/editor" to "CapCut Desktop Studio"
+            "dexxp.webapp.whatsapp_web" -> "https://web.whatsapp.com/" to "WhatsApp Web"
+            "dexxp.webapp.youtube_desktop" -> "https://www.youtube.com" to "YouTube Desktop"
+            "dexxp.webapp.gmail_web" -> "https://mail.google.com/mail/u/0/#inbox" to "Gmail Desktop"
+            else -> "https://www.google.com" to "Desktop Web"
+        }
+        val title = fallbackLabel?.takeIf { it.isNotBlank() } ?: defaultTitle
+        val intent = Intent(appContext, DesktopWebActivity::class.java).apply {
+            putExtra(DesktopWebActivity.EXTRA_URL, url)
+            putExtra(DesktopWebActivity.EXTRA_TITLE, title)
+            putExtra(DesktopWebActivity.EXTRA_RECORD_KEY, recordKey)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+        }
+        return intent to title
+    }
+
+    private fun launchWebRecordByKey(
+        recordKey: String,
+        fallbackLabel: String?,
+        snapMode: WindowSnapMode,
+        launchContext: Context?
+    ): Boolean {
+        val (intent, title) = buildDesktopWebIntentForRecordKey(recordKey, fallbackLabel)
+        val displayInfo = sessionRepository.activeDisplay.value
+        val bounds = if (snapMode.usesFreeformContainer) {
+            computeWindowBounds(recordKey, displayInfo, snapMode)
+        } else {
+            Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+        }
+        return launchCustomIntentInFreeform(
+            intent = intent,
+            recordPackageKey = recordKey,
+            label = title,
+            customBounds = bounds,
+            snapMode = snapMode,
+            launchContext = launchContext
+        )
+    }
+
     fun launchOrFocusPackage(
         packageName: String,
         snapMode: WindowSnapMode? = null,
         launchContext: Context? = null
     ): Boolean {
-        if (packageName == "com.lemon.lvoverseas" || packageName == "com.capcut.editor" || packageName == "dexxp.webapp.capcut_web") {
+        if (packageName.startsWith("dexxp.webapp.")) {
             val existing = sessionRepository.runningWindows.value.firstOrNull {
-                it.packageName == "dexxp.webapp.capcut_web"
+                it.packageName == packageName
             }
-            if (existing != null && !existing.isMinimized) {
-                sessionRepository.markWindowFocused(existing.packageName)
-                return true
+            val targetSnap = snapMode ?: existing?.snapMode ?: WindowSnapMode.MAXIMIZED
+            if (existing != null && (snapMode == null || snapMode == existing.snapMode)) {
+                val displayInfo = sessionRepository.activeDisplay.value
+                val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
+                val useFreeform = targetSnap.usesFreeformContainer
+                val bounds = if (useFreeform) {
+                    existing.bounds.takeIf { !it.isEmpty } ?: computeWindowBounds(packageName, displayInfo, targetSnap)
+                } else {
+                    Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+                }
+                val options = buildLaunchActivityOptions(
+                    targetDisplayId = targetDisplayId,
+                    launchBounds = if (useFreeform) bounds else null,
+                    useFreeformWindowing = useFreeform
+                )
+                if (DesktopWebActivity.bringToFrontByRecordKey(packageName, options)) {
+                    sessionRepository.setShowDesktop(false)
+                    sessionRepository.setWindowMinimized(packageName, minimized = false)
+                    sessionRepository.markWindowFocused(packageName)
+                    return true
+                }
             }
-            return launchCapCutDesktopStudio(snapMode ?: WindowSnapMode.MAXIMIZED, launchContext)
+            DesktopWebActivity.finishByRecordKey(packageName)
+            return launchWebRecordByKey(packageName, existing?.label, targetSnap, launchContext)
+        }
+
+        if (packageName == "com.lemon.lvoverseas" || packageName == "com.capcut.editor") {
+            val nativeRecord = sessionRepository.runningWindows.value.firstOrNull {
+                it.packageName == packageName
+            }
+            if (nativeRecord == null &&
+                snapMode != WindowSnapMode.LANDSCAPE_CONTAINER &&
+                snapMode != WindowSnapMode.PORTRAIT_CONTAINER
+            ) {
+                return launchOrFocusPackage("dexxp.webapp.capcut_web", snapMode, launchContext)
+            }
         }
 
         val item = appRepository.findByPackage(packageName)
@@ -269,6 +401,11 @@ class AppLauncher(
                 ?: sessionRepository.runningWindows.value
                     .firstOrNull { it.packageName == packageName }
                     ?.snapMode
+            if ((packageName == "com.lemon.lvoverseas" || packageName == "com.capcut.editor") &&
+                sessionRepository.runningWindows.value.any { it.packageName == packageName }
+            ) {
+                return launchAppInternal(item, effectiveSnap, newInstance = false, launchContext = launchContext)
+            }
             return launchApp(item, effectiveSnap, newInstance = false, launchContext = launchContext)
         }
 
@@ -313,7 +450,7 @@ class AppLauncher(
     /**
      * Launches [packageName] into caller-specified exact [exactBounds] on the secondary display,
      * used by [com.dexxp.desktop.layout.WorkspaceLayoutPresetManager] for custom Snap Groups
-     * (e.g., 70% / 30% Editing Suite or saved multi-window layouts).
+     * (e.g., 70% / 30% Editing Suite or saved multi-window layouts) and interactive resize/move.
      */
     fun launchPackageWithExactBounds(
         packageName: String,
@@ -321,6 +458,22 @@ class AppLauncher(
         snapMode: WindowSnapMode = WindowSnapMode.FREEFORM_CASCADED,
         launchContext: Context? = null
     ): Boolean {
+        if (packageName.startsWith("dexxp.webapp.")) {
+            val existingLabel = sessionRepository.runningWindows.value
+                .firstOrNull { it.packageName == packageName }
+                ?.label
+            DesktopWebActivity.finishByRecordKey(packageName)
+            val (intent, title) = buildDesktopWebIntentForRecordKey(packageName, existingLabel)
+            return launchCustomIntentInFreeform(
+                intent = intent,
+                recordPackageKey = packageName,
+                label = title,
+                customBounds = Rect(exactBounds),
+                snapMode = snapMode,
+                launchContext = launchContext
+            )
+        }
+
         val displayInfo = sessionRepository.activeDisplay.value
         val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
 
@@ -369,21 +522,15 @@ class AppLauncher(
     }
 
     /**
-     * Stashes a single Freeform window to the Taskbar (`WindowTitlebarOverlayController` Minimize
-     * or Taskbar click on an already focused window).
+     * Explicitly minimizes [packageName] to the Taskbar and focuses the next visible window
+     * (or brings the secondary desktop shell to the front when no visible windows remain).
      */
-    fun toggleMinimizeWindow(packageName: String, launchContext: Context? = null) {
-        val record = sessionRepository.runningWindows.value.firstOrNull {
-            it.packageName == packageName
-        } ?: return
-
-        if (record.isMinimized) {
-            sessionRepository.setWindowMinimized(packageName, minimized = false)
-            launchOrFocusPackage(packageName, record.snapMode, launchContext)
-            return
+    fun minimizeWindow(packageName: String, launchContext: Context? = null) {
+        sessionRepository.setWindowMinimized(packageName, minimized = true)
+        if (packageName.startsWith("dexxp.webapp.")) {
+            DesktopWebActivity.minimizeByRecordKey(packageName)
         }
 
-        sessionRepository.setWindowMinimized(packageName, minimized = true)
         val remainingVisible = sessionRepository.runningWindows.value
             .filterNot { it.isMinimized || it.packageName == packageName }
             .sortedByDescending { it.lastActiveEpochMs }
@@ -396,6 +543,24 @@ class AppLauncher(
             sessionRepository.setWindowMinimized(nextTop.packageName, minimized = false)
             launchOrFocusPackage(nextTop.packageName, nextTop.snapMode, launchContext)
         }
+    }
+
+    /**
+     * Toggles single-window minimize/restore from Taskbar clicks or keyboard shortcuts.
+     */
+    fun toggleMinimizeWindow(packageName: String, launchContext: Context? = null) {
+        val record = sessionRepository.runningWindows.value.firstOrNull {
+            it.packageName == packageName
+        } ?: return
+
+        if (record.isMinimized || sessionRepository.isShowDesktopActive.value) {
+            sessionRepository.setShowDesktop(false)
+            sessionRepository.setWindowMinimized(packageName, minimized = false)
+            launchOrFocusPackage(packageName, record.snapMode, launchContext)
+            return
+        }
+
+        minimizeWindow(packageName, launchContext)
     }
 
     /**
@@ -465,11 +630,20 @@ class AppLauncher(
     }
 
     /**
-     * Closes the target window by backgrounding behind the desktop shell and terminating processes.
+     * Closes the target window cleanly, removing its task/record, shifting focus to the next visible
+     * window (or returning to the desktop wallpaper), and reclaiming background app processes.
      */
     fun closeWindow(packageName: String, launchContext: Context? = null) {
-        DesktopPointerAccessibilityService.instance?.dispatchGlobalBackForClose()
+        val wasFocused = !sessionRepository.isShowDesktopActive.value &&
+            sessionRepository.focusedOrMostRecentWindow()?.packageName == packageName
+
         sessionRepository.removeWindowRecord(packageName)
+
+        if (packageName.startsWith("dexxp.webapp.")) {
+            DesktopWebActivity.finishByRecordKey(packageName)
+        } else if (wasFocused) {
+            DesktopPointerAccessibilityService.instance?.dispatchGlobalBackForClose()
+        }
 
         val remainingVisible = sessionRepository.runningWindows.value
             .filterNot { it.isMinimized || it.packageName == packageName }
@@ -484,9 +658,13 @@ class AppLauncher(
             launchOrFocusPackage(nextTop.packageName, nextTop.snapMode, launchContext)
         }
 
-        runCatching {
+        if (!packageName.startsWith("dexxp.webapp.")) {
             val am = appContext.getSystemService(ActivityManager::class.java)
-            am?.killBackgroundProcesses(packageName)
+            runCatching { am?.killBackgroundProcesses(packageName) }
+            CoroutineScope(Dispatchers.Default).launch {
+                delay(180)
+                runCatching { am?.killBackgroundProcesses(packageName) }
+            }
         }
     }
 
@@ -735,24 +913,7 @@ class AppLauncher(
                 )
             }
         }
-
-        // For maximized widescreen apps (Chrome, CapCut, YouTube, VLC) and TV mode, enforce FULLSCREEN (1)
-        // so Xiaomi HyperOS renders the full 16:9 tablet/desktop layout (>960dp width) with zero phone notches.
-        // For Portrait Containers, Landscape Containers, Split-Half, Quadrants, and Freeform windows,
-        // pass WINDOWING_MODE_FREEFORM (5) with exact launchBounds so portrait-only apps float cleanly
-        // without stretching or full-screen letterboxing.
-        val targetWindowingMode = if (effectiveFreeform) {
-            WINDOWING_MODE_FREEFORM
-        } else {
-            WINDOWING_MODE_FULLSCREEN
-        }
-        runCatching {
-            setLaunchWindowingModeMethod?.invoke(options, targetWindowingMode)
-        }
-
-        return options.toBundle().apply {
-            putInt(KEY_LAUNCH_WINDOWING_MODE, targetWindowingMode)
-        }
+        return options.toBundle()
     }
 
     private fun buildFreeformActivityOptions(
@@ -770,9 +931,6 @@ class AppLauncher(
         const val TASKBAR_HEIGHT_DP = 56
         private const val CASCADE_STEP_DP = 32
         private const val CASCADE_MODULO = 6
-        const val WINDOWING_MODE_FULLSCREEN = 1
-        const val WINDOWING_MODE_FREEFORM = 5
-        private const val KEY_LAUNCH_WINDOWING_MODE = "android.activity.windowingMode"
 
         fun resolvePolicySnapMode(
             policy: AppWindowLaunchPolicy,

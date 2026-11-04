@@ -43,6 +43,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
@@ -80,18 +81,26 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * Projects a sleek, semi-transparent `28dp` Material 3 Floating Titlebar directly above the active
- * third-party Freeform window on the secondary display.
+ * Universal Top Window Control Bar (`28dp` Material 3 Surface) for secondary displays:
  *
- * - Tracks live top-boundary coordinates from `DesktopPointerAccessibilityService.getWindowsOnAllDisplays()`
- *   (via [PointerFocusBridge.detectedExternalFrames]) reconciled with [DesktopSessionRepository.runningWindows].
- * - Uses `FLAG_NOT_FOCUSABLE | FLAG_NOT_TOUCH_MODAL` so clicking Minimize, Maximize/Restore, or Close
- *   never steals input focus from the active Freeform app or blocks outside touches.
- * - Automatically hides when the active window is maximized, minimized, or covered by shell flyouts.
+ * - **Floating / Container Windows (`9:19` Portrait, `16:10` Landscape, Freeform, Split)**:
+ *   Renders a full-width floating titlebar directly above the window frame with drag-to-move,
+ *   drag-to-resize, container orientation toggle, Minimize `[—]`, Maximize `[□]`, and Close `[X]`.
+ * - **Maximized / Fullscreen Applications**:
+ *   Remains accessible as a sleek, pinned top-center Window Control Pill (`336dp x 28dp`) so users
+ *   always have 1-click access to Minimize `[—]`, Restore Container `[□]`, and Close `[X]` without
+ *   occluding top-left navigation menus or top-right action buttons.
+ * - **System-Overlay-Only Attachment**:
+ *   Attaches strictly via `TYPE_ACCESSIBILITY_OVERLAY` or `TYPE_APPLICATION_OVERLAY` (NEVER a second
+ *   `Presentation` dialog, which would occlude `APPLICATION_LAYER` Activities). When overlay
+ *   permissions are not yet granted, gracefully returns `false` so the docked Taskbar's direct
+ *   1-click `[X]` and Minimize/Restore controls govern active apps without blocking their surfaces.
  */
 class WindowTitlebarOverlayController(
     private val appContext: Context,
@@ -152,10 +161,16 @@ class WindowTitlebarOverlayController(
     private var hostLifecycle: OverlayHostLifecycle? = null
     private var scope: CoroutineScope? = null
 
+    var isAttached: Boolean = false
+        private set
+
     private val renderModelFlow = MutableStateFlow<TitlebarRenderModel?>(null)
 
     @Volatile
     private var currentVisibleBounds: Rect? = null
+
+    // Reusable Rect avoiding allocations during 120-240Hz interactive window drag/resize loops
+    private val reusableDragBounds = Rect()
 
     @Volatile
     private var isInteractivelyManipulating: Boolean = false
@@ -170,8 +185,8 @@ class WindowTitlebarOverlayController(
         if (!display.isValid) return false
 
         val a11yService = DesktopPointerAccessibilityService.instance
-        val windowType: Int
-        val baseOverlayCtx: Context
+        var resolvedOverlayCtx: Context? = null
+        var resolvedWindowType: Int = 0
 
         if (a11yService != null) {
             val a11yCtx = runCatching {
@@ -182,34 +197,28 @@ class WindowTitlebarOverlayController(
                 )
             }.getOrNull()
             if (a11yCtx != null) {
-                baseOverlayCtx = a11yCtx
-                windowType = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
-            } else if (Settings.canDrawOverlays(appContext)) {
-                val appCtx = runCatching {
-                    scaledDisplayContext.createWindowContext(
-                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                        null
-                    )
-                }.getOrNull() ?: return false
-                baseOverlayCtx = appCtx
-                windowType = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            } else {
-                return false
+                resolvedOverlayCtx = a11yCtx
+                resolvedWindowType = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
             }
-        } else if (Settings.canDrawOverlays(appContext)) {
-            val appCtx = runCatching {
-                scaledDisplayContext.createWindowContext(
+        }
+
+        if (resolvedOverlayCtx == null && Settings.canDrawOverlays(appContext)) {
+            val appOverlayCtx = runCatching {
+                appContext.createDisplayContext(display).createWindowContext(
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                     null
                 )
-            }.getOrNull() ?: return false
-            baseOverlayCtx = appCtx
-            windowType = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            return false
+            }.getOrNull()
+            if (appOverlayCtx != null) {
+                resolvedOverlayCtx = appOverlayCtx
+                resolvedWindowType = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            }
         }
 
+        // NEVER instantiate a second Presentation dialog on the display (would black out APPLICATION_LAYER).
+        val baseOverlayCtx = resolvedOverlayCtx ?: return false
         val wm = baseOverlayCtx.getSystemService(WindowManager::class.java) ?: return false
+
         val uiCtx = baseOverlayCtx.createConfigurationContext(
             scaledDisplayContext.resources.configuration
         )
@@ -255,16 +264,24 @@ class WindowTitlebarOverlayController(
                                 cancelInteractiveManipulation()
                             },
                             onToggleContainerOrientation = {
-                                appLauncher.toggleContainerOrientation(activeModel.packageName)
+                                post {
+                                    appLauncher.toggleContainerOrientation(activeModel.packageName)
+                                }
                             },
                             onMinimize = {
-                                appLauncher.toggleMinimizeWindow(activeModel.packageName)
+                                post {
+                                    appLauncher.minimizeWindow(activeModel.packageName)
+                                }
                             },
                             onMaximizeOrRestore = {
-                                appLauncher.toggleMaximizeOrRestoreWindow(activeModel.packageName)
+                                post {
+                                    appLauncher.toggleMaximizeOrRestoreWindow(activeModel.packageName)
+                                }
                             },
                             onClose = {
-                                appLauncher.closeWindow(activeModel.packageName)
+                                post {
+                                    appLauncher.closeWindow(activeModel.packageName)
+                                }
                             }
                         )
                     }
@@ -277,9 +294,10 @@ class WindowTitlebarOverlayController(
             barHeightPx,
             0,
             0,
-            windowType,
+            resolvedWindowType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_SPLIT_TOUCH or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT
@@ -292,7 +310,7 @@ class WindowTitlebarOverlayController(
             wm.addView(view, lp)
             true
         }.onFailure { err ->
-            Log.w(TAG, "Unable to attach floating window titlebar on display ${display.displayId}", err)
+            Log.w(TAG, "Unable to attach system overlay window titlebar on display ${display.displayId}", err)
         }.getOrDefault(false)
 
         if (!added) {
@@ -304,6 +322,7 @@ class WindowTitlebarOverlayController(
         composeView = view
         layoutParams = lp
         hostLifecycle = owner
+        isAttached = true
 
         pointerFocusBridge.registerTitlebarOverlayView(view) { currentVisibleBounds }
 
@@ -325,9 +344,11 @@ class WindowTitlebarOverlayController(
                     displayInfo = displayInfo,
                     barHeightPx = barHeightPx
                 )
-            }.collect { nextModel ->
-                applyTitlebarLayout(nextModel)
             }
+                .distinctUntilChanged()
+                .collect { nextModel ->
+                    applyTitlebarLayout(nextModel)
+                }
         }
         return true
     }
@@ -352,36 +373,72 @@ class WindowTitlebarOverlayController(
             ?: liveFrames.firstOrNull { it.isActive }
             ?: topRecord?.let { rec -> liveFrames.firstOrNull { it.packageName == rec.packageName } }
 
-        val targetPkg = liveFocused?.packageName ?: topRecord?.packageName ?: return null
-        val matchedRecord = visibleRecords.firstOrNull { it.packageName == targetPkg }
+        // Reconcile DexXP's own package name (`DesktopWebActivity` vs `SecondaryDesktopActivity`)
+        val targetPkg: String = when {
+            liveFocused != null && liveFocused.packageName != appContext.packageName -> {
+                liveFocused.packageName
+            }
+            liveFocused?.packageName == appContext.packageName -> {
+                val activeWeb = visibleRecords.firstOrNull {
+                    it.packageName.startsWith("dexxp.webapp.") && it.isFocused
+                } ?: visibleRecords
+                    .filter { it.packageName.startsWith("dexxp.webapp.") }
+                    .maxByOrNull { it.lastActiveEpochMs }
+                activeWeb?.packageName ?: topRecord?.packageName ?: return null
+            }
+            else -> topRecord?.packageName ?: return null
+        }
+
+        if (targetPkg == appContext.packageName) return null
         if (records.any { it.packageName == targetPkg && it.isMinimized }) return null
 
-        val rawWinBounds = liveFocused?.bounds ?: matchedRecord?.bounds ?: return null
+        val matchedRecord = visibleRecords.firstOrNull { it.packageName == targetPkg }
+        val rawWinBounds = when {
+            liveFocused != null && (
+                liveFocused.packageName == targetPkg ||
+                    (liveFocused.packageName == appContext.packageName && targetPkg.startsWith("dexxp.webapp."))
+                ) -> liveFocused.bounds
+            matchedRecord != null -> matchedRecord.bounds
+            else -> return null
+        }
         if (rawWinBounds.width() < 180 || rawWinBounds.height() < 120) return null
 
+        val density = (displayInfo.scaledDensityDpi / 160f).coerceAtLeast(0.75f)
         val isMaximizedSnap = matchedRecord?.snapMode == WindowSnapMode.MAXIMIZED
-        val fillsWorkArea = rawWinBounds.width() >= (displayInfo.widthPx * 0.95f).roundToInt() &&
-            rawWinBounds.top <= (10 * (displayInfo.scaledDensityDpi / 160f)).roundToInt()
+        val fillsWorkArea = rawWinBounds.width() >= (displayInfo.widthPx * 0.94f).roundToInt() &&
+            rawWinBounds.top <= (12 * density).roundToInt()
+        val isMaximized = isMaximizedSnap || fillsWorkArea
 
-        // Titlebar hides seamlessly when the window is maximized
-        if (isMaximizedSnap || fillsWorkArea) {
+        // DesktopWebActivity already renders its own dedicated 44dp top bar with [—] [□] [X] when maximized
+        if (isMaximized && targetPkg.startsWith("dexxp.webapp.")) {
             return null
         }
 
         val appItem = appRepository.findByPackage(targetPkg)
-        val resolvedTitle = liveFocused?.title?.takeIf { it.isNotBlank() }
+        val resolvedTitle = liveFocused?.title?.takeIf {
+            it.isNotBlank() && liveFocused.packageName == targetPkg
+        }
             ?: matchedRecord?.label
             ?: appItem?.label
             ?: targetPkg.substringAfterLast('.')
 
-        val barWidth = rawWinBounds.width().coerceIn(220, displayInfo.widthPx)
-        val barLeft = rawWinBounds.left.coerceIn(0, (displayInfo.widthPx - barWidth).coerceAtLeast(0))
-        val barTop = (rawWinBounds.top - barHeightPx - 2).coerceAtLeast(0)
-        val barBounds = Rect(barLeft, barTop, barLeft + barWidth, barTop + barHeightPx)
-        val currentSnap = matchedRecord?.snapMode ?: if (rawWinBounds.width() < rawWinBounds.height()) {
-            WindowSnapMode.PORTRAIT_CONTAINER
+        val currentSnap = when {
+            isMaximized -> WindowSnapMode.MAXIMIZED
+            matchedRecord != null -> matchedRecord.snapMode
+            rawWinBounds.width() < rawWinBounds.height() -> WindowSnapMode.PORTRAIT_CONTAINER
+            else -> WindowSnapMode.FREEFORM_CASCADED
+        }
+
+        val barBounds = if (isMaximized) {
+            val pillWidthPx = (MAXIMIZED_PILL_WIDTH_DP * density).roundToInt()
+                .coerceIn(240, (displayInfo.widthPx - 24).coerceAtLeast(240))
+            val pillLeft = ((displayInfo.widthPx - pillWidthPx) / 2).coerceAtLeast(0)
+            Rect(pillLeft, 0, pillLeft + pillWidthPx, barHeightPx)
         } else {
-            WindowSnapMode.FREEFORM_CASCADED
+            val barWidth = rawWinBounds.width().coerceIn(220, displayInfo.widthPx)
+            val barLeft = rawWinBounds.left.coerceIn(0, (displayInfo.widthPx - barWidth).coerceAtLeast(0))
+            val barTop = (rawWinBounds.top - barHeightPx - 2).coerceAtLeast(0)
+            Rect(barLeft, barTop, barLeft + barWidth, barTop + barHeightPx)
         }
 
         return TitlebarRenderModel(
@@ -389,12 +446,28 @@ class WindowTitlebarOverlayController(
             label = resolvedTitle,
             iconBitmap = appItem?.iconBitmap,
             snapMode = currentSnap,
-            isPortraitContainer = currentSnap == WindowSnapMode.PORTRAIT_CONTAINER ||
-                rawWinBounds.width() < (rawWinBounds.height() * 0.72f).roundToInt(),
-            isMaximized = false,
+            isPortraitContainer = !isMaximized && (
+                currentSnap == WindowSnapMode.PORTRAIT_CONTAINER ||
+                    rawWinBounds.width() < (rawWinBounds.height() * 0.72f).roundToInt()
+                ),
+            isMaximized = isMaximized,
             clientWindowBounds = Rect(rawWinBounds),
             barScreenBounds = barBounds
         )
+    }
+
+    private fun updateHostWindowLayout(view: View, x: Int, y: Int, width: Int, height: Int) {
+        val wm = windowManager ?: return
+        val lp = layoutParams ?: return
+        if (lp.x != x || lp.y != y || lp.width != width || lp.height != height) {
+            lp.x = x
+            lp.y = y
+            lp.width = width
+            lp.height = height
+            if (view.isAttachedToWindow) {
+                runCatching { wm.updateViewLayout(view, lp) }
+            }
+        }
     }
 
     private fun beginInteractiveMove(model: TitlebarRenderModel) {
@@ -402,32 +475,30 @@ class WindowTitlebarOverlayController(
         isInteractivelyManipulating = true
         dragOriginBarLeft = lp.x
         dragOriginBarTop = lp.y
-        dragOriginBarWidth = lp.width
+        dragOriginBarWidth = lp.width.coerceAtLeast(model.barScreenBounds.width())
         dragAccumDx = 0f
         dragAccumDy = 0f
     }
 
     private fun stepInteractiveMove(dx: Float, dy: Float, localPointerX: Float, localPointerY: Float) {
         val view = composeView ?: return
-        val wm = windowManager ?: return
         val lp = layoutParams ?: return
         val displayInfo = sessionRepository.activeDisplay.value ?: return
 
         dragAccumDx += dx
         dragAccumDy += dy
 
+        val curW = lp.width.coerceAtLeast(240)
+        val curH = lp.height.coerceAtLeast(28)
         val nextLeft = (dragOriginBarLeft + dragAccumDx.roundToInt())
-            .coerceIn(0, (displayInfo.widthPx - lp.width).coerceAtLeast(0))
+            .coerceIn(0, (displayInfo.widthPx - curW).coerceAtLeast(0))
         val nextTop = (dragOriginBarTop + dragAccumDy.roundToInt())
-            .coerceIn(0, (displayInfo.heightPx - lp.height * 3).coerceAtLeast(0))
+            .coerceIn(0, (displayInfo.heightPx - curH * 3).coerceAtLeast(0))
 
         if (lp.x != nextLeft || lp.y != nextTop) {
-            lp.x = nextLeft
-            lp.y = nextTop
-            currentVisibleBounds = Rect(nextLeft, nextTop, nextLeft + lp.width, nextTop + lp.height)
-            if (view.isAttachedToWindow) {
-                runCatching { wm.updateViewLayout(view, lp) }
-            }
+            reusableDragBounds.set(nextLeft, nextTop, nextLeft + curW, nextTop + curH)
+            currentVisibleBounds = reusableDragBounds
+            updateHostWindowLayout(view, nextLeft, nextTop, curW, curH)
         }
 
         val pointerScreenX = (nextLeft + localPointerX).coerceIn(0f, (displayInfo.widthPx - 1).toFloat())
@@ -442,7 +513,16 @@ class WindowTitlebarOverlayController(
         }
         val movedDx = dragAccumDx.roundToInt()
         val movedDy = dragAccumDy.roundToInt()
-        if (kotlin.math.abs(movedDx) < 3 && kotlin.math.abs(movedDy) < 3) {
+        if (abs(movedDx) < 3 && abs(movedDy) < 3) {
+            return
+        }
+        // Tearing off a maximized top pill downward restores the app into its floating container
+        if (model.isMaximized) {
+            if (movedDy > 24) {
+                appLauncher.toggleMaximizeOrRestoreWindow(model.packageName)
+            } else {
+                applyTitlebarLayout(renderModelFlow.value)
+            }
             return
         }
         val movedRect = Rect(model.clientWindowBounds).apply {
@@ -461,18 +541,18 @@ class WindowTitlebarOverlayController(
     }
 
     private fun beginInteractiveResize(model: TitlebarRenderModel) {
+        if (model.isMaximized) return
         val lp = layoutParams ?: return
         isInteractivelyManipulating = true
         dragOriginBarLeft = lp.x
         dragOriginBarTop = lp.y
-        dragOriginBarWidth = lp.width
+        dragOriginBarWidth = lp.width.coerceAtLeast(model.barScreenBounds.width())
         dragAccumDx = 0f
         dragAccumDy = 0f
     }
 
     private fun stepInteractiveResize(dx: Float, dy: Float) {
         val view = composeView ?: return
-        val wm = windowManager ?: return
         val lp = layoutParams ?: return
         val displayInfo = sessionRepository.activeDisplay.value ?: return
 
@@ -481,20 +561,20 @@ class WindowTitlebarOverlayController(
 
         val maxW = (displayInfo.widthPx - lp.x - 8).coerceAtLeast(260)
         val previewW = (dragOriginBarWidth + dragAccumDx.roundToInt()).coerceIn(260, maxW)
+        val curH = lp.height.coerceAtLeast(28)
         if (lp.width != previewW) {
-            lp.width = previewW
-            currentVisibleBounds = Rect(lp.x, lp.y, lp.x + previewW, lp.y + lp.height)
-            if (view.isAttachedToWindow) {
-                runCatching { wm.updateViewLayout(view, lp) }
-            }
+            reusableDragBounds.set(lp.x, lp.y, lp.x + previewW, lp.y + curH)
+            currentVisibleBounds = reusableDragBounds
+            updateHostWindowLayout(view, lp.x, lp.y, previewW, curH)
         }
     }
 
     private fun finishInteractiveResize(model: TitlebarRenderModel) {
         isInteractivelyManipulating = false
+        if (model.isMaximized) return
         val dW = dragAccumDx.roundToInt()
         val dH = dragAccumDy.roundToInt()
-        if (kotlin.math.abs(dW) < 4 && kotlin.math.abs(dH) < 4) {
+        if (abs(dW) < 4 && abs(dH) < 4) {
             return
         }
         val base = model.clientWindowBounds
@@ -514,6 +594,7 @@ class WindowTitlebarOverlayController(
     private fun cancelInteractiveManipulation() {
         isInteractivelyManipulating = false
         snappingController.clearPreview()
+        applyTitlebarLayout(renderModelFlow.value)
     }
 
     private fun applyTitlebarLayout(model: TitlebarRenderModel?) {
@@ -521,8 +602,6 @@ class WindowTitlebarOverlayController(
             return
         }
         val view = composeView ?: return
-        val wm = windowManager ?: return
-        val lp = layoutParams ?: return
 
         if (model == null) {
             currentVisibleBounds = null
@@ -535,28 +614,18 @@ class WindowTitlebarOverlayController(
 
         renderModelFlow.value = model
         val b = model.barScreenBounds
-        val geometryChanged = lp.x != b.left ||
-            lp.y != b.top ||
-            lp.width != b.width() ||
-            lp.height != b.height()
-
         currentVisibleBounds = b
         if (view.visibility != View.VISIBLE) {
             view.visibility = View.VISIBLE
         }
-        if (geometryChanged && view.isAttachedToWindow) {
-            lp.x = b.left
-            lp.y = b.top
-            lp.width = b.width()
-            lp.height = b.height()
-            runCatching { wm.updateViewLayout(view, lp) }
-        }
+        updateHostWindowLayout(view, b.left, b.top, b.width(), b.height())
     }
 
     fun detach() {
         scope?.cancel()
         scope = null
         isInteractivelyManipulating = false
+        isAttached = false
         snappingController.clearPreview()
         currentVisibleBounds = null
         renderModelFlow.value = null
@@ -579,8 +648,27 @@ class WindowTitlebarOverlayController(
     companion object {
         private const val TAG = "WindowTitlebarOverlay"
         const val TITLEBAR_HEIGHT_DP = 28
+        const val MAXIMIZED_PILL_WIDTH_DP = 336
     }
 }
+
+private val FloatingTitlebarShape = RoundedCornerShape(
+    topStart = 12.dp,
+    topEnd = 12.dp,
+    bottomStart = 6.dp,
+    bottomEnd = 6.dp
+)
+
+private val MaximizedTopPillShape = RoundedCornerShape(
+    topStart = 0.dp,
+    topEnd = 0.dp,
+    bottomStart = 12.dp,
+    bottomEnd = 12.dp
+)
+
+private val ControlButtonShape = RoundedCornerShape(6.dp)
+private val AppIconClipShape = RoundedCornerShape(4.dp)
+private val CloseRedColor = Color(0xFFD93025)
 
 @Composable
 private fun FloatingWindowTitlebarBar(
@@ -598,31 +686,50 @@ private fun FloatingWindowTitlebarBar(
     onMaximizeOrRestore: () -> Unit,
     onClose: () -> Unit
 ) {
+    val barShape = if (model.isMaximized) MaximizedTopPillShape else FloatingTitlebarShape
+
     Row(
         modifier = Modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = 6.dp, bottomEnd = 6.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f))
+            .clip(barShape)
+            .background(
+                MaterialTheme.colorScheme.surfaceContainer.copy(
+                    alpha = if (model.isMaximized) 0.94f else 0.92f
+                )
+            )
             .border(
                 width = 1.dp,
                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.72f),
-                shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = 6.dp, bottomEnd = 6.dp)
+                shape = barShape
             )
+            // Consume all inside-bar pointer changes at Final pass so clicks never leak into background apps
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Final)
+                        event.changes.forEach { change ->
+                            if (!change.isConsumed) {
+                                change.consume()
+                            }
+                        }
+                    }
+                }
+            }
             .padding(start = 10.dp, end = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Draggable Title Area (Drag to Move / Snap to Edges, Double-Click to Maximize)
+        // Draggable Title Area (Drag to Move / Tear-Off / Snap to Edges, Double-Click to Maximize/Restore)
         Row(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxHeight()
                 .pointerHoverIcon(PointerIcon.Hand)
-                .pointerInput(model.packageName) {
+                .pointerInput(model.packageName, model.isMaximized) {
                     detectTapGestures(
                         onDoubleTap = { onMaximizeOrRestore() }
                     )
                 }
-                .pointerInput(model.packageName, "dragMove") {
+                .pointerInput(model.packageName, model.isMaximized, "dragMove") {
                     detectDragGestures(
                         onDragStart = { onDragMoveStart() },
                         onDrag = { change, dragAmount ->
@@ -646,7 +753,7 @@ private fun FloatingWindowTitlebarBar(
                     contentDescription = model.label,
                     modifier = Modifier
                         .size(16.dp)
-                        .clip(RoundedCornerShape(4.dp))
+                        .clip(AppIconClipShape)
                 )
             } else {
                 Box(
@@ -682,14 +789,16 @@ private fun FloatingWindowTitlebarBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            // Interactive Drag-to-Resize Handle
-            TitlebarResizeGrip(
-                packageName = model.packageName,
-                onResizeStart = onResizeStart,
-                onResizeDelta = onResizeDelta,
-                onResizeEnd = onResizeEnd,
-                onResizeCancel = onResizeCancel
-            )
+            if (!model.isMaximized) {
+                // Interactive Drag-to-Resize Handle (Floating Windows)
+                TitlebarResizeGrip(
+                    packageName = model.packageName,
+                    onResizeStart = onResizeStart,
+                    onResizeDelta = onResizeDelta,
+                    onResizeEnd = onResizeEnd,
+                    onResizeCancel = onResizeCancel
+                )
+            }
             // 1-Click Portrait (9:19) <-> Landscape (16:10) Container Toggle
             TitlebarControlButton(
                 icon = if (model.isPortraitContainer) DesktopIcons.AspectLandscape else DesktopIcons.PhonePortrait,
@@ -703,6 +812,7 @@ private fun FloatingWindowTitlebarBar(
                 hoverIconTint = MaterialTheme.colorScheme.onSecondaryContainer,
                 onClick = onToggleContainerOrientation
             )
+            // Minimize [—]
             TitlebarControlButton(
                 icon = DesktopIcons.Minimize,
                 contentDescription = "Minimize to Taskbar",
@@ -710,6 +820,7 @@ private fun FloatingWindowTitlebarBar(
                 iconTint = MaterialTheme.colorScheme.onSurface,
                 onClick = onMinimize
             )
+            // Maximize / Container Toggle [□]
             TitlebarControlButton(
                 icon = if (model.isMaximized) DesktopIcons.RestoreWindow else DesktopIcons.Maximize,
                 contentDescription = "Maximize / Restore",
@@ -717,10 +828,11 @@ private fun FloatingWindowTitlebarBar(
                 iconTint = MaterialTheme.colorScheme.onSurface,
                 onClick = onMaximizeOrRestore
             )
+            // Close [X] (Red Hover)
             TitlebarControlButton(
                 icon = DesktopIcons.Close,
                 contentDescription = "Close Window",
-                hoverColor = Color(0xFFD93025),
+                hoverColor = CloseRedColor,
                 iconTint = MaterialTheme.colorScheme.onSurface,
                 hoverIconTint = Color.White,
                 onClick = onClose
@@ -743,7 +855,7 @@ private fun TitlebarResizeGrip(
     Box(
         modifier = Modifier
             .size(width = 26.dp, height = 22.dp)
-            .clip(RoundedCornerShape(6.dp))
+            .clip(ControlButtonShape)
             .hoverable(interactionSource)
             .pointerHoverIcon(PointerIcon.Hand)
             .background(
@@ -790,7 +902,7 @@ private fun TitlebarControlButton(
     Box(
         modifier = Modifier
             .size(width = 28.dp, height = 22.dp)
-            .clip(RoundedCornerShape(6.dp))
+            .clip(ControlButtonShape)
             .hoverable(interactionSource)
             .pointerHoverIcon(PointerIcon.Hand)
             .background(if (isHovered) hoverColor else Color.Transparent)

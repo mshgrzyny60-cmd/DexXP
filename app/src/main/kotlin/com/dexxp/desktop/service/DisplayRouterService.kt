@@ -28,6 +28,7 @@ import com.dexxp.desktop.MainActivity
 import com.dexxp.desktop.R
 import com.dexxp.desktop.SecondaryDesktopActivity
 import com.dexxp.desktop.bridge.CursorOverlayController
+import com.dexxp.desktop.browser.DesktopWebActivity
 import com.dexxp.desktop.model.DesktopDpiScale
 import com.dexxp.desktop.model.DesktopEnvironmentMode
 import com.dexxp.desktop.model.DisplayPerformanceProfile
@@ -39,7 +40,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -63,6 +66,7 @@ class DisplayRouterService : Service() {
     private lateinit var titlebarOverlayController: WindowTitlebarOverlayController
 
     private var activePresentation: DesktopWindowPresentation? = null
+    private var activeScaledDisplayContext: Context? = null
     private var attachedDisplayId: Int = Display.INVALID_DISPLAY
 
     private val displayListener = object : DisplayManager.DisplayListener {
@@ -142,6 +146,25 @@ class DisplayRouterService : Service() {
                     if (attachedDisplayId != Display.INVALID_DISPLAY) {
                         displayManager.getDisplay(attachedDisplayId)?.let { display ->
                             bindPresentationToDisplay(display)
+                        }
+                    }
+                }
+        }
+
+        serviceScope.launch {
+            dexApp.sessionRepository.systemReadiness
+                .map { it.overlayPermissionGranted to it.accessibilityPointerEnabled }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect { (overlayGranted, a11yGranted) ->
+                    if ((overlayGranted || a11yGranted) &&
+                        attachedDisplayId != Display.INVALID_DISPLAY &&
+                        !titlebarOverlayController.isAttached
+                    ) {
+                        val display = displayManager.getDisplay(attachedDisplayId)
+                        val scaledCtx = activeScaledDisplayContext
+                        if (display != null && display.isValid && scaledCtx != null) {
+                            titlebarOverlayController.attachToDisplay(display, scaledCtx)
                         }
                     }
                 }
@@ -319,8 +342,9 @@ class DisplayRouterService : Service() {
         runCatching {
             presentation.show()
             activePresentation = presentation
+            activeScaledDisplayContext = scaledDisplayContext
             attachedDisplayId = display.displayId
-            // Attach 28dp non-overlapping floating titlebar above Freeform / Portrait Container windows
+            // Attach 28dp universal top window bar (floating above containers & pinned pill on fullscreen apps)
             titlebarOverlayController.attachToDisplay(display, scaledDisplayContext)
             // Top-most cursor HUD overlay above desktop (only for physical HDMI/DP monitors, skip on scrcpy virtual displays to prevent clickjacking touch drops)
             if (info.transportType != DisplayTransportType.SCRCPY_VIRTUAL_DISPLAY) {
@@ -342,12 +366,14 @@ class DisplayRouterService : Service() {
             runCatching { pres.dismiss() }
         }
         activePresentation = null
+        activeScaledDisplayContext = null
         attachedDisplayId = Display.INVALID_DISPLAY
         dexApp.keyboardManager.dismissAltTab()
         dexApp.sessionRepository.dismissFlyouts()
         dexApp.pointerFocusBridge.onExternalDisplayDisconnected()
         dexApp.sessionRepository.updateActiveDisplay(null)
         if (!keepPowerSession) {
+            DesktopWebActivity.finishAllSecondaryInstances()
             dexApp.phoneScreenPowerController.onExternalDisplayStateChanged(attached = false)
         }
     }
