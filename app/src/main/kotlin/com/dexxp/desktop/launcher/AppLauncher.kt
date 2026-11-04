@@ -15,6 +15,7 @@ import android.view.Display
 import com.dexxp.desktop.SecondaryDesktopActivity
 import com.dexxp.desktop.StandaloneDesktopActivity
 import com.dexxp.desktop.bridge.DesktopPointerAccessibilityService
+import com.dexxp.desktop.model.AppWindowLaunchPolicy
 import com.dexxp.desktop.model.DesktopAppItem
 import com.dexxp.desktop.model.DesktopEnvironmentMode
 import com.dexxp.desktop.model.ExternalDisplayInfo
@@ -54,14 +55,32 @@ class AppLauncher(
 
     fun launchApp(
         app: DesktopAppItem,
-        snapMode: WindowSnapMode = WindowSnapMode.MAXIMIZED,
+        snapMode: WindowSnapMode? = null,
         newInstance: Boolean = false,
         launchContext: Context? = null
     ): Boolean {
         if (app.packageName == "com.lemon.lvoverseas" || app.packageName == "com.capcut.editor") {
-            return launchCapCutDesktopStudio(snapMode, launchContext)
+            return launchCapCutDesktopStudio(snapMode ?: WindowSnapMode.MAXIMIZED, launchContext)
         }
         return launchAppInternal(app, snapMode, newInstance, launchContext)
+    }
+
+    fun resolveEffectiveSnapMode(
+        app: DesktopAppItem?,
+        packageName: String,
+        requestedSnapMode: WindowSnapMode?
+    ): WindowSnapMode {
+        if (sessionRepository.environmentMode.value == DesktopEnvironmentMode.TV_LEANBACK) {
+            return WindowSnapMode.MAXIMIZED
+        }
+        if (requestedSnapMode != null) {
+            return requestedSnapMode
+        }
+        val policy = sessionRepository.getAppWindowPolicy(packageName)
+        return resolvePolicySnapMode(
+            policy = policy,
+            isPortraitLocked = app?.isPortraitLocked == true
+        )
     }
 
     fun launchCapCutDesktopStudio(
@@ -94,7 +113,7 @@ class AppLauncher(
 
     private fun launchAppInternal(
         app: DesktopAppItem,
-        snapMode: WindowSnapMode = WindowSnapMode.MAXIMIZED,
+        snapMode: WindowSnapMode? = null,
         newInstance: Boolean = false,
         launchContext: Context? = null
     ): Boolean {
@@ -106,6 +125,8 @@ class AppLauncher(
 
         val displayInfo = sessionRepository.activeDisplay.value
         val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
+        val effectiveSnap = resolveEffectiveSnapMode(app, app.packageName, snapMode)
+        val useFreeform = !isTv && effectiveSnap.usesFreeformContainer
 
         val baseIntent = appContext.packageManager.getLaunchIntentForPackage(app.packageName)
         val intent = if (baseIntent != null) {
@@ -127,23 +148,31 @@ class AppLauncher(
             }
         }
 
-        val bounds = Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+        val bounds = if (useFreeform) {
+            computeWindowBounds(app.packageName, displayInfo, effectiveSnap)
+        } else {
+            Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+        }
         val optionsBundle = buildLaunchActivityOptions(
             targetDisplayId = targetDisplayId,
             isTvMode = isTv,
-            launchBounds = bounds
+            launchBounds = if (useFreeform) bounds else null,
+            useFreeformWindowing = useFreeform
         )
 
         val dispatcherContext = launchContext ?: appContext
 
         fun recordLaunch() {
+            if (useFreeform && effectiveSnap == WindowSnapMode.FREEFORM_CASCADED) {
+                rememberedBounds[app.packageName] = Rect(bounds)
+            }
             sessionRepository.setShowDesktop(false)
             sessionRepository.recordWindowLaunched(
                 packageName = app.packageName,
                 activityName = app.activityName,
                 label = app.label,
                 bounds = bounds,
-                snapMode = WindowSnapMode.MAXIMIZED,
+                snapMode = if (isTv) WindowSnapMode.MAXIMIZED else effectiveSnap,
                 displayId = targetDisplayId
             )
         }
@@ -183,11 +212,17 @@ class AppLauncher(
     ): Boolean {
         val displayInfo = sessionRepository.activeDisplay.value
         val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
-        val effectiveBounds = customBounds ?: Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+        val useFreeform = snapMode.usesFreeformContainer
+        val effectiveBounds = customBounds ?: if (useFreeform) {
+            computeWindowBounds(recordPackageKey, displayInfo, snapMode)
+        } else {
+            Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+        }
         val optionsBundle = buildLaunchActivityOptions(
             targetDisplayId = targetDisplayId,
             isTvMode = false,
-            launchBounds = effectiveBounds
+            launchBounds = if (useFreeform) effectiveBounds else null,
+            useFreeformWindowing = useFreeform
         )
 
         val dispatcher = launchContext ?: appContext
@@ -234,7 +269,6 @@ class AppLauncher(
                 ?: sessionRepository.runningWindows.value
                     .firstOrNull { it.packageName == packageName }
                     ?.snapMode
-                ?: WindowSnapMode.MAXIMIZED
             return launchApp(item, effectiveSnap, newInstance = false, launchContext = launchContext)
         }
 
@@ -243,11 +277,17 @@ class AppLauncher(
         fallbackIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
         val displayInfo = sessionRepository.activeDisplay.value
         val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
-        val effectiveSnap = snapMode ?: WindowSnapMode.MAXIMIZED
-        val bounds = Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+        val effectiveSnap = snapMode ?: resolveEffectiveSnapMode(null, packageName, null)
+        val useFreeform = effectiveSnap.usesFreeformContainer
+        val bounds = if (useFreeform) {
+            computeWindowBounds(packageName, displayInfo, effectiveSnap)
+        } else {
+            Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+        }
         val bundle = buildLaunchActivityOptions(
             targetDisplayId = targetDisplayId,
-            launchBounds = bounds
+            launchBounds = if (useFreeform) bounds else null,
+            useFreeformWindowing = useFreeform
         )
         val dispatcher = launchContext ?: appContext
         val launched = dispatchActivityIntent(
@@ -359,18 +399,69 @@ class AppLauncher(
     }
 
     /**
-     * Toggles [packageName] between `MAXIMIZED` full work-area bounds and restored `FREEFORM_CASCADED` bounds.
+     * Toggles [packageName] between `MAXIMIZED` full work-area bounds and its smart floating container.
      */
     fun toggleMaximizeOrRestoreWindow(packageName: String, launchContext: Context? = null): Boolean {
         val current = sessionRepository.runningWindows.value.firstOrNull {
             it.packageName == packageName
         }
         val nextSnap = if (current?.snapMode == WindowSnapMode.MAXIMIZED) {
-            WindowSnapMode.FREEFORM_CASCADED
+            val app = appRepository.findByPackage(packageName)
+            val policy = sessionRepository.getAppWindowPolicy(packageName)
+            when {
+                policy == AppWindowLaunchPolicy.PORTRAIT_WINDOW -> WindowSnapMode.PORTRAIT_CONTAINER
+                policy == AppWindowLaunchPolicy.LANDSCAPE_WINDOW -> WindowSnapMode.LANDSCAPE_CONTAINER
+                app?.isPortraitLocked == true -> WindowSnapMode.PORTRAIT_CONTAINER
+                else -> WindowSnapMode.FREEFORM_CASCADED
+            }
         } else {
             WindowSnapMode.MAXIMIZED
         }
         return launchOrFocusPackage(packageName, nextSnap, launchContext)
+    }
+
+    /**
+     * Switches a floating window seamlessly between `9:19` Portrait Window and `16:10` Landscape Container.
+     */
+    fun toggleContainerOrientation(packageName: String, launchContext: Context? = null): Boolean {
+        val current = sessionRepository.runningWindows.value.firstOrNull {
+            it.packageName == packageName
+        }
+        val nextSnap = if (current?.snapMode == WindowSnapMode.PORTRAIT_CONTAINER) {
+            WindowSnapMode.LANDSCAPE_CONTAINER
+        } else {
+            WindowSnapMode.PORTRAIT_CONTAINER
+        }
+        return launchOrFocusPackage(packageName, nextSnap, launchContext)
+    }
+
+    /**
+     * Commits interactive drag-to-move or drag-to-resize bounds for a floating window on the secondary display.
+     */
+    fun repositionWindowBounds(
+        packageName: String,
+        newBounds: Rect,
+        snapMode: WindowSnapMode = WindowSnapMode.FREEFORM_CASCADED,
+        launchContext: Context? = null
+    ): Boolean {
+        val displayInfo = sessionRepository.activeDisplay.value
+        val displayW = displayInfo?.widthPx ?: 1920
+        val displayH = displayInfo?.heightPx ?: 1080
+        val density = (displayInfo?.scaledDensityDpi ?: 160) / 160f
+        val taskbarPx = (TASKBAR_HEIGHT_DP * density).roundToInt()
+        val marginPx = (WindowSnappingController.SNAP_MARGIN_DP * density).roundToInt()
+        val topHeadroomPx = maxOf(marginPx, (WindowSnappingController.FLOATING_TOP_HEADROOM_DP * density).roundToInt())
+        val usableH = (displayH - taskbarPx).coerceAtLeast(360)
+
+        val clampedW = newBounds.width().coerceIn(320, (displayW - marginPx * 2).coerceAtLeast(320))
+        val clampedH = newBounds.height().coerceIn(280, (usableH - topHeadroomPx - marginPx).coerceAtLeast(280))
+        val clampedLeft = newBounds.left.coerceIn(marginPx, (displayW - clampedW - marginPx).coerceAtLeast(marginPx))
+        val clampedTop = newBounds.top.coerceIn(topHeadroomPx, (usableH - clampedH - marginPx).coerceAtLeast(topHeadroomPx))
+        val clamped = Rect(clampedLeft, clampedTop, clampedLeft + clampedW, clampedTop + clampedH)
+
+        rememberedBounds[packageName] = Rect(clamped)
+        sessionRepository.updateWindowBoundsAndSnap(packageName, clamped, snapMode)
+        return launchPackageWithExactBounds(packageName, clamped, snapMode, launchContext)
     }
 
     /**
@@ -508,6 +599,25 @@ class AppLauncher(
         val height = displayInfo?.heightPx ?: 1080
         val dpi = displayInfo?.scaledDensityDpi ?: 160
 
+        if (snapMode == WindowSnapMode.PORTRAIT_CONTAINER) {
+            val base = snappingController.computeSnapBounds(snapMode, width, height, dpi)
+            val otherPortraits = sessionRepository.runningWindows.value.count {
+                !it.isMinimized && it.snapMode == WindowSnapMode.PORTRAIT_CONTAINER && it.packageName != packageName
+            }
+            if (otherPortraits > 0) {
+                val density = dpi / 160f
+                val marginPx = (WindowSnappingController.SNAP_MARGIN_DP * density).roundToInt()
+                val winW = base.width()
+                val shift = ((otherPortraits % 3) * (winW * 0.42f).roundToInt())
+                val shiftedLeft = (base.left + shift).coerceIn(
+                    marginPx,
+                    (width - winW - marginPx).coerceAtLeast(marginPx)
+                )
+                return Rect(shiftedLeft, base.top, shiftedLeft + winW, base.bottom)
+            }
+            return base
+        }
+
         if (snapMode != WindowSnapMode.FREEFORM_CASCADED) {
             return snappingController.computeSnapBounds(snapMode, width, height, dpi)
         }
@@ -600,15 +710,25 @@ class AppLauncher(
     fun buildFreeformOptionsBundleForDisplay(
         targetDisplayId: Int,
         launchBounds: Rect? = null
-    ): Bundle = buildLaunchActivityOptions(targetDisplayId, isTvMode = false, launchBounds = launchBounds)
+    ): Bundle = buildLaunchActivityOptions(
+        targetDisplayId = targetDisplayId,
+        isTvMode = false,
+        launchBounds = launchBounds,
+        useFreeformWindowing = launchBounds != null
+    )
 
     fun buildLaunchActivityOptions(
         targetDisplayId: Int,
         isTvMode: Boolean = false,
-        launchBounds: Rect? = null
+        launchBounds: Rect? = null,
+        useFreeformWindowing: Boolean = false
     ): Bundle {
+        val effectiveFreeform = !isTvMode && useFreeformWindowing && launchBounds != null && !launchBounds.isEmpty
         val options = ActivityOptions.makeBasic().apply {
             setLaunchDisplayId(targetDisplayId)
+            if (effectiveFreeform) {
+                setLaunchBounds(launchBounds)
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 setPendingIntentBackgroundActivityStartMode(
                     ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
@@ -616,12 +736,16 @@ class AppLauncher(
             }
         }
 
-        // Always enforce FULLSCREEN windowing mode on secondary displays (both TV and Desktop/scrcpy modes).
-        // On Xiaomi MIUI/HyperOS, passing WINDOWING_MODE_FREEFORM (5) triggers Xiaomi's proprietary
-        // phone-shaped floating window container with vertical constraints and camera notches.
-        // FULLSCREEN mode gives apps (Chrome, CapCut, YouTube, etc.) the full 16:9 widescreen canvas (>960dp width),
-        // allowing them to switch automatically to their tablet/desktop UI with full tabs and timelines.
-        val targetWindowingMode = WINDOWING_MODE_FULLSCREEN
+        // For maximized widescreen apps (Chrome, CapCut, YouTube, VLC) and TV mode, enforce FULLSCREEN (1)
+        // so Xiaomi HyperOS renders the full 16:9 tablet/desktop layout (>960dp width) with zero phone notches.
+        // For Portrait Containers, Landscape Containers, Split-Half, Quadrants, and Freeform windows,
+        // pass WINDOWING_MODE_FREEFORM (5) with exact launchBounds so portrait-only apps float cleanly
+        // without stretching or full-screen letterboxing.
+        val targetWindowingMode = if (effectiveFreeform) {
+            WINDOWING_MODE_FREEFORM
+        } else {
+            WINDOWING_MODE_FULLSCREEN
+        }
         runCatching {
             setLaunchWindowingModeMethod?.invoke(options, targetWindowingMode)
         }
@@ -634,7 +758,12 @@ class AppLauncher(
     private fun buildFreeformActivityOptions(
         targetDisplayId: Int,
         launchBounds: Rect?
-    ): Bundle = buildLaunchActivityOptions(targetDisplayId, isTvMode = false, launchBounds = launchBounds)
+    ): Bundle = buildLaunchActivityOptions(
+        targetDisplayId = targetDisplayId,
+        isTvMode = false,
+        launchBounds = launchBounds,
+        useFreeformWindowing = launchBounds != null
+    )
 
     companion object {
         private const val TAG = "AppLauncher"
@@ -644,5 +773,20 @@ class AppLauncher(
         const val WINDOWING_MODE_FULLSCREEN = 1
         const val WINDOWING_MODE_FREEFORM = 5
         private const val KEY_LAUNCH_WINDOWING_MODE = "android.activity.windowingMode"
+
+        fun resolvePolicySnapMode(
+            policy: AppWindowLaunchPolicy,
+            isPortraitLocked: Boolean
+        ): WindowSnapMode = when (policy) {
+            AppWindowLaunchPolicy.PORTRAIT_WINDOW -> WindowSnapMode.PORTRAIT_CONTAINER
+            AppWindowLaunchPolicy.LANDSCAPE_WINDOW -> WindowSnapMode.LANDSCAPE_CONTAINER
+            AppWindowLaunchPolicy.FREEFORM_WINDOW -> WindowSnapMode.FREEFORM_CASCADED
+            AppWindowLaunchPolicy.MAXIMIZED_WIDESCREEN -> WindowSnapMode.MAXIMIZED
+            AppWindowLaunchPolicy.AUTO -> if (isPortraitLocked) {
+                WindowSnapMode.PORTRAIT_CONTAINER
+            } else {
+                WindowSnapMode.MAXIMIZED
+            }
+        }
     }
 }

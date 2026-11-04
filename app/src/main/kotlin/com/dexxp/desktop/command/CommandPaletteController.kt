@@ -328,7 +328,7 @@ class CommandPaletteController(
             CommandResultKind.APP -> {
                 val app = item.appItem ?: return false
                 closePalette()
-                appLauncher.launchApp(app, WindowSnapMode.FREEFORM_CASCADED, false, launchContext)
+                appLauncher.launchApp(app, snapMode = null, newInstance = false, launchContext = launchContext)
             }
 
             CommandResultKind.FILE -> {

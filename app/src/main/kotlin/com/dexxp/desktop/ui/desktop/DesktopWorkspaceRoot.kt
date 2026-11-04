@@ -6,11 +6,17 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.provider.Settings
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -30,6 +36,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -66,7 +73,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -89,6 +99,7 @@ import com.dexxp.desktop.keyboard.DesktopKeyboardManager
 import com.dexxp.desktop.launcher.AppLauncher
 import com.dexxp.desktop.launcher.AppRepository
 import com.dexxp.desktop.layout.WorkspaceLayoutPresetManager
+import com.dexxp.desktop.model.AppWindowLaunchPolicy
 import com.dexxp.desktop.model.CallPhase
 import com.dexxp.desktop.model.DesktopAppItem
 import com.dexxp.desktop.model.DesktopDpiScale
@@ -214,6 +225,7 @@ fun DesktopWorkspaceRoot(
     val altTabState by keyboardManager.altTabState.collectAsState()
     val pinnedPackages by sessionRepository.pinnedPackages.collectAsState()
     val desktopShortcutPackages by sessionRepository.desktopShortcutPackages.collectAsState()
+    val appWindowPolicies by sessionRepository.appWindowPolicies.collectAsState()
     val readiness by sessionRepository.systemReadiness.collectAsState()
 
     val activeWorkspace = workspaces.getOrElse(activeWorkspaceIndex) { workspaces.first() }
@@ -237,6 +249,7 @@ fun DesktopWorkspaceRoot(
                 fileManager = desktopFileManager,
                 pinnedPackages = pinnedPackages,
                 desktopShortcutPackages = desktopShortcutPackages,
+                appWindowPolicies = appWindowPolicies,
                 onLaunchApp = { item, snap, multi ->
                     appLauncher.launchApp(item, snap, multi, context)
                 },
@@ -248,6 +261,7 @@ fun DesktopWorkspaceRoot(
                 },
                 onTogglePinTaskbar = sessionRepository::toggleTaskbarPin,
                 onToggleDesktopShortcut = sessionRepository::toggleDesktopShortcut,
+                onChangeWindowPolicy = sessionRepository::setAppWindowPolicy,
                 onOpenAppInfo = { pkg -> appLauncher.launchAppDetailsSettings(pkg, context) },
                 modifier = Modifier
                     .fillMaxSize()
@@ -315,7 +329,10 @@ fun DesktopWorkspaceRoot(
                     onCloseWindow = { pkg ->
                         appLauncher.closeWindow(pkg, context)
                     },
-                    onTogglePin = sessionRepository::toggleTaskbarPin
+                    onTogglePin = sessionRepository::toggleTaskbarPin,
+                    onOpenAppInfo = { pkg ->
+                        appLauncher.launchAppDetailsSettings(pkg, context)
+                    }
                 )
             }
         }
@@ -354,6 +371,7 @@ fun DesktopWorkspaceRoot(
                             fileManager = desktopFileManager,
                             pinnedPackages = pinnedPackages,
                             desktopShortcutPackages = desktopShortcutPackages,
+                            appWindowPolicies = appWindowPolicies,
                             onLaunchApp = { item, snap, multi ->
                                 appLauncher.launchApp(item, snap, multi, context)
                             },
@@ -365,6 +383,7 @@ fun DesktopWorkspaceRoot(
                             },
                             onTogglePinTaskbar = sessionRepository::toggleTaskbarPin,
                             onToggleDesktopShortcut = sessionRepository::toggleDesktopShortcut,
+                            onChangeWindowPolicy = sessionRepository::setAppWindowPolicy,
                             onOpenAppInfo = { pkg -> appLauncher.launchAppDetailsSettings(pkg, context) },
                             modifier = Modifier.weight(1f)
                         )
@@ -391,22 +410,35 @@ fun DesktopWorkspaceRoot(
                     }
                 }
 
-                // Start Menu Panel anchored bottom-start
-                if (isStartMenuOpen) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(
-                                start = 14.dp,
-                                bottom = (AppLauncher.TASKBAR_HEIGHT_DP + 10).dp
-                            ),
-                        contentAlignment = Alignment.BottomStart
+                // Start Menu Panel anchored bottom-start with M3 spring entrance/exit
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(
+                            start = 14.dp,
+                            bottom = (AppLauncher.TASKBAR_HEIGHT_DP + 10).dp
+                        ),
+                    contentAlignment = Alignment.BottomStart
+                ) {
+                    AnimatedVisibility(
+                        visible = isStartMenuOpen,
+                        enter = fadeIn(tween(140)) + scaleIn(
+                            initialScale = 0.94f,
+                            transformOrigin = TransformOrigin(0f, 1f),
+                            animationSpec = spring(dampingRatio = 0.84f, stiffness = Spring.StiffnessMedium)
+                        ),
+                        exit = fadeOut(tween(95)) + scaleOut(
+                            targetScale = 0.96f,
+                            transformOrigin = TransformOrigin(0f, 1f),
+                            animationSpec = tween(95)
+                        )
                     ) {
                         StartMenuPanel(
                             apps = apps,
                             webApps = desktopBrowserLauncher.builtInWebApps,
                             pinnedPackages = pinnedPackages,
                             desktopShortcutPackages = desktopShortcutPackages,
+                            appWindowPolicies = appWindowPolicies,
                             onSearchFocusChanged = sessionRepository::setSearchFieldFocused,
                             onLaunchApp = { item, snap, multi ->
                                 appLauncher.launchApp(item, snap, multi, context)
@@ -419,6 +451,7 @@ fun DesktopWorkspaceRoot(
                             },
                             onTogglePinTaskbar = sessionRepository::toggleTaskbarPin,
                             onToggleDesktopShortcut = sessionRepository::toggleDesktopShortcut,
+                            onChangeWindowPolicy = sessionRepository::setAppWindowPolicy,
                             onOpenAppInfo = { pkg ->
                                 sessionRepository.dismissFlyouts()
                                 appLauncher.launchAppDetailsSettings(pkg, context)
@@ -429,15 +462,23 @@ fun DesktopWorkspaceRoot(
                 }
 
                 // Virtual Workspaces & Saved Snap Groups Flyout (`Super + Ctrl + Arrows`)
-                if (isWorkspaceSwitcherOpen) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(
-                                start = 140.dp,
-                                bottom = (AppLauncher.TASKBAR_HEIGHT_DP + 10).dp
-                            ),
-                        contentAlignment = Alignment.BottomStart
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(
+                            start = 140.dp,
+                            bottom = (AppLauncher.TASKBAR_HEIGHT_DP + 10).dp
+                        ),
+                    contentAlignment = Alignment.BottomStart
+                ) {
+                    AnimatedVisibility(
+                        visible = isWorkspaceSwitcherOpen,
+                        enter = fadeIn(tween(130)) + scaleIn(
+                            initialScale = 0.95f,
+                            transformOrigin = TransformOrigin(0.2f, 1f),
+                            animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMedium)
+                        ),
+                        exit = fadeOut(tween(90)) + scaleOut(targetScale = 0.96f, transformOrigin = TransformOrigin(0.2f, 1f))
                     ) {
                         WorkspaceSwitcherFlyout(
                             workspaces = workspaces,
@@ -463,15 +504,23 @@ fun DesktopWorkspaceRoot(
                 }
 
                 // Clipboard History (`Win + V`) Flyout anchored bottom-end
-                if (isClipboardHistoryOpen) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(
-                                end = 78.dp,
-                                bottom = (AppLauncher.TASKBAR_HEIGHT_DP + 10).dp
-                            ),
-                        contentAlignment = Alignment.BottomEnd
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(
+                            end = 78.dp,
+                            bottom = (AppLauncher.TASKBAR_HEIGHT_DP + 10).dp
+                        ),
+                    contentAlignment = Alignment.BottomEnd
+                ) {
+                    AnimatedVisibility(
+                        visible = isClipboardHistoryOpen,
+                        enter = fadeIn(tween(130)) + scaleIn(
+                            initialScale = 0.95f,
+                            transformOrigin = TransformOrigin(0.85f, 1f),
+                            animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMedium)
+                        ),
+                        exit = fadeOut(tween(90)) + scaleOut(targetScale = 0.96f, transformOrigin = TransformOrigin(0.85f, 1f))
                     ) {
                         ClipboardHistoryFlyout(
                             entries = clipboardEntries,
@@ -488,15 +537,23 @@ fun DesktopWorkspaceRoot(
                 }
 
                 // Notification Center Flyout anchored bottom-end
-                if (isNotificationCenterOpen) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(
-                                end = 14.dp,
-                                bottom = (AppLauncher.TASKBAR_HEIGHT_DP + 10).dp
-                            ),
-                        contentAlignment = Alignment.BottomEnd
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(
+                            end = 14.dp,
+                            bottom = (AppLauncher.TASKBAR_HEIGHT_DP + 10).dp
+                        ),
+                    contentAlignment = Alignment.BottomEnd
+                ) {
+                    AnimatedVisibility(
+                        visible = isNotificationCenterOpen,
+                        enter = fadeIn(tween(135)) + scaleIn(
+                            initialScale = 0.95f,
+                            transformOrigin = TransformOrigin(1f, 1f),
+                            animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMedium)
+                        ),
+                        exit = fadeOut(tween(90)) + scaleOut(targetScale = 0.96f, transformOrigin = TransformOrigin(1f, 1f))
                     ) {
                         NotificationCenterFlyout(
                             notifications = notifications,
@@ -530,15 +587,23 @@ fun DesktopWorkspaceRoot(
                 }
 
                 // System Tray Quick Settings Flyout anchored bottom-end
-                if (isSystemTrayOpen) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(
-                                end = 14.dp,
-                                bottom = (AppLauncher.TASKBAR_HEIGHT_DP + 10).dp
-                            ),
-                        contentAlignment = Alignment.BottomEnd
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(
+                            end = 14.dp,
+                            bottom = (AppLauncher.TASKBAR_HEIGHT_DP + 10).dp
+                        ),
+                    contentAlignment = Alignment.BottomEnd
+                ) {
+                    AnimatedVisibility(
+                        visible = isSystemTrayOpen,
+                        enter = fadeIn(tween(135)) + scaleIn(
+                            initialScale = 0.95f,
+                            transformOrigin = TransformOrigin(1f, 1f),
+                            animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMedium)
+                        ),
+                        exit = fadeOut(tween(90)) + scaleOut(targetScale = 0.96f, transformOrigin = TransformOrigin(1f, 1f))
                     ) {
                         QuickSettingsFlyout(
                             displayInfo = displayInfo,
@@ -723,7 +788,11 @@ fun DesktopWorkspaceRoot(
                         onCloseWindow = { pkg ->
                             appLauncher.closeWindow(pkg, context)
                         },
-                        onTogglePin = sessionRepository::toggleTaskbarPin
+                        onTogglePin = sessionRepository::toggleTaskbarPin,
+                        onOpenAppInfo = { pkg ->
+                            sessionRepository.dismissFlyouts()
+                            appLauncher.launchAppDetailsSettings(pkg, context)
+                        }
                     )
                 }
 
@@ -828,11 +897,13 @@ private fun DesktopShortcutAndFileGrid(
     fileManager: DesktopFileManager,
     pinnedPackages: Set<String>,
     desktopShortcutPackages: Set<String>,
-    onLaunchApp: (DesktopAppItem, WindowSnapMode, Boolean) -> Unit,
+    appWindowPolicies: Map<String, AppWindowLaunchPolicy> = emptyMap(),
+    onLaunchApp: (DesktopAppItem, WindowSnapMode?, Boolean) -> Unit,
     onOpenFile: (DesktopFileItem) -> Unit,
     onShareFile: (DesktopFileItem) -> Unit,
     onTogglePinTaskbar: (String) -> Unit,
     onToggleDesktopShortcut: (String) -> Unit,
+    onChangeWindowPolicy: (String, AppWindowLaunchPolicy) -> Unit = { _, _ -> },
     onOpenAppInfo: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -850,17 +921,25 @@ private fun DesktopShortcutAndFileGrid(
             val isHovered by interactionSource.collectIsHoveredAsState()
             val isSelected = selectedKey == app.uniqueKey
             var contextMenuOpen by remember { mutableStateOf(false) }
+            val tileScale by animateFloatAsState(
+                targetValue = if (isHovered) 1.04f else 1.0f,
+                animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                label = "desktopShortcutScale"
+            )
+            val policy = appWindowPolicies[app.packageName] ?: AppWindowLaunchPolicy.AUTO
 
             Box {
                 Column(
                     modifier = Modifier
                         .width(92.dp)
+                        .scale(tileScale)
                         .clip(RoundedCornerShape(14.dp))
                         .hoverable(interactionSource)
+                        .pointerHoverIcon(PointerIcon.Hand)
                         .background(
                             when {
                                 isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-                                isHovered -> Color.White.copy(alpha = 0.10f)
+                                isHovered -> Color.White.copy(alpha = 0.12f)
                                 else -> Color.Transparent
                             }
                         )
@@ -869,7 +948,7 @@ private fun DesktopShortcutAndFileGrid(
                             color = if (isSelected) {
                                 MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
                             } else if (isHovered) {
-                                Color.White.copy(alpha = 0.22f)
+                                Color.White.copy(alpha = 0.25f)
                             } else {
                                 Color.Transparent
                             },
@@ -879,7 +958,7 @@ private fun DesktopShortcutAndFileGrid(
                         .combinedClickable(
                             onClick = {
                                 selectedKey = app.uniqueKey
-                                onLaunchApp(app, WindowSnapMode.FREEFORM_CASCADED, false)
+                                onLaunchApp(app, null, false)
                             },
                             onLongClick = { contextMenuOpen = true }
                         )
@@ -926,6 +1005,7 @@ private fun DesktopShortcutAndFileGrid(
                     expanded = contextMenuOpen,
                     isPinnedTaskbar = app.packageName in pinnedPackages,
                     isOnDesktop = app.packageName in desktopShortcutPackages,
+                    currentPolicy = policy,
                     onDismiss = { contextMenuOpen = false },
                     onSelectSnapMode = { snap, multi ->
                         contextMenuOpen = false
@@ -938,6 +1018,9 @@ private fun DesktopShortcutAndFileGrid(
                     onToggleDesktopShortcut = {
                         contextMenuOpen = false
                         onToggleDesktopShortcut(app.packageName)
+                    },
+                    onChangeWindowPolicy = { nextPolicy ->
+                        onChangeWindowPolicy(app.packageName, nextPolicy)
                     },
                     onOpenAppInfo = {
                         contextMenuOpen = false
@@ -1002,7 +1085,8 @@ private fun DesktopTaskbar(
     onActivatePackage: (String, WindowSnapMode?) -> Unit,
     onMinimizePackage: (String) -> Unit,
     onCloseWindow: (String) -> Unit,
-    onTogglePin: (String) -> Unit
+    onTogglePin: (String) -> Unit,
+    onOpenAppInfo: (String) -> Unit
 ) {
     val context = LocalContext.current
 
@@ -1053,21 +1137,28 @@ private fun DesktopTaskbar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Start Launcher Button
+                val startHover = remember { MutableInteractionSource() }
+                val isStartHovered by startHover.collectIsHoveredAsState()
+                val startScale by animateFloatAsState(if (isStartHovered) 1.06f else 1f, label = "startScale")
                 Surface(
                     onClick = onToggleStartMenu,
                     shape = RoundedCornerShape(14.dp),
-                    color = if (isStartMenuOpen) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.primaryContainer
+                    color = when {
+                        isStartMenuOpen -> MaterialTheme.colorScheme.primary
+                        isStartHovered -> MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                        else -> MaterialTheme.colorScheme.primaryContainer
                     },
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier
+                        .size(40.dp)
+                        .scale(startScale)
+                        .hoverable(startHover)
+                        .pointerHoverIcon(PointerIcon.Hand)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = DesktopIcons.AppsGrid,
                             contentDescription = "Start Menu",
-                            tint = if (isStartMenuOpen) {
+                            tint = if (isStartMenuOpen || isStartHovered) {
                                 MaterialTheme.colorScheme.onPrimary
                             } else {
                                 MaterialTheme.colorScheme.onPrimaryContainer
@@ -1080,15 +1171,20 @@ private fun DesktopTaskbar(
                 Spacer(modifier = Modifier.width(8.dp))
 
                 // Pill Spotlight / Command Palette Trigger (`Alt + Space`)
+                val searchHover = remember { MutableInteractionSource() }
+                val isSearchHovered by searchHover.collectIsHoveredAsState()
                 Surface(
                     onClick = onOpenCommandPalette,
                     shape = RoundedCornerShape(50),
-                    color = if (isCommandPaletteOpen) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainerHighest
+                    color = when {
+                        isCommandPaletteOpen -> MaterialTheme.colorScheme.primaryContainer
+                        isSearchHovered -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.78f)
+                        else -> MaterialTheme.colorScheme.surfaceContainerHighest
                     },
-                    modifier = Modifier.height(38.dp)
+                    modifier = Modifier
+                        .height(38.dp)
+                        .hoverable(searchHover)
+                        .pointerHoverIcon(PointerIcon.Hand)
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 13.dp),
@@ -1120,29 +1216,12 @@ private fun DesktopTaskbar(
                 Spacer(modifier = Modifier.width(6.dp))
 
                 // Mission Control / Exposé Window Overview (`Super + Tab`)
-                Surface(
-                    onClick = onToggleMissionControl,
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isMissionControlOpen) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainerHigh
-                    },
-                    modifier = Modifier.size(38.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = DesktopIcons.OverviewGrid,
-                            contentDescription = "Mission Control Overview (Super + Tab)",
-                            tint = if (isMissionControlOpen) {
-                                MaterialTheme.colorScheme.onPrimaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                            modifier = Modifier.size(17.dp)
-                        )
-                    }
-                }
+                TaskbarUtilityIconButton(
+                    icon = DesktopIcons.OverviewGrid,
+                    contentDescription = "Mission Control Overview (Super + Tab)",
+                    isActive = isMissionControlOpen,
+                    onClick = onToggleMissionControl
+                )
 
                 Spacer(modifier = Modifier.width(6.dp))
 
@@ -1156,52 +1235,22 @@ private fun DesktopTaskbar(
                 Spacer(modifier = Modifier.width(6.dp))
 
                 // Show Desktop (`Super + D`) Toggle
-                Surface(
-                    onClick = onToggleShowDesktop,
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isShowDesktopActive && runningWindows.isNotEmpty()) {
-                        MaterialTheme.colorScheme.secondaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainerHigh
-                    },
-                    modifier = Modifier.size(38.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = DesktopIcons.DesktopView,
-                            contentDescription = "Show Desktop",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
+                TaskbarUtilityIconButton(
+                    icon = DesktopIcons.DesktopView,
+                    contentDescription = "Show Desktop",
+                    isActive = isShowDesktopActive && runningWindows.isNotEmpty(),
+                    onClick = onToggleShowDesktop
+                )
 
                 Spacer(modifier = Modifier.width(6.dp))
 
                 // Integrated Local Developer Terminal (`Ctrl + Alt + T` / `Super + T`)
-                Surface(
-                    onClick = onToggleTerminal,
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isTerminalOpen) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainerHigh
-                    },
-                    modifier = Modifier.size(38.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = DesktopIcons.Terminal,
-                            contentDescription = "Developer Terminal (Ctrl + Alt + T)",
-                            tint = if (isTerminalOpen) {
-                                MaterialTheme.colorScheme.onPrimaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                            modifier = Modifier.size(17.dp)
-                        )
-                    }
-                }
+                TaskbarUtilityIconButton(
+                    icon = DesktopIcons.Terminal,
+                    contentDescription = "Developer Terminal (Ctrl + Alt + T)",
+                    isActive = isTerminalOpen,
+                    onClick = onToggleTerminal
+                )
 
                 Spacer(modifier = Modifier.width(12.dp))
 
@@ -1224,6 +1273,7 @@ private fun DesktopTaskbar(
                             onSnap = { snap -> onActivatePackage(entry.packageName, snap) },
                             onMinimize = { onMinimizePackage(entry.packageName) },
                             onTogglePin = { onTogglePin(entry.packageName) },
+                            onOpenAppInfo = { onOpenAppInfo(entry.packageName) },
                             onCloseRecord = { onCloseWindow(entry.packageName) }
                         )
                     }
@@ -1250,88 +1300,50 @@ private fun DesktopTaskbar(
                 }
 
                 // Sleep Phone Screen (AMOLED Blackout) Toggle
-                Surface(
-                    onClick = onTogglePhoneBlackout,
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isPhoneBlackoutActive) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainerHigh
-                    },
-                    modifier = Modifier.size(38.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = DesktopIcons.MoonSleep,
-                            contentDescription = "Sleep Phone Screen (AMOLED Blackout)",
-                            tint = if (isPhoneBlackoutActive) {
-                                MaterialTheme.colorScheme.onPrimaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                            modifier = Modifier.size(17.dp)
-                        )
-                    }
-                }
+                TaskbarUtilityIconButton(
+                    icon = DesktopIcons.MoonSleep,
+                    contentDescription = "Sleep Phone Screen (AMOLED Blackout)",
+                    isActive = isPhoneBlackoutActive,
+                    onClick = onTogglePhoneBlackout
+                )
 
                 Spacer(modifier = Modifier.width(6.dp))
 
                 // Clipboard History (`Win + V`) Trigger
-                Surface(
-                    onClick = onToggleClipboardHistory,
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isClipboardHistoryOpen) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainerHigh
-                    },
-                    modifier = Modifier.size(38.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = DesktopIcons.Clipboard,
-                            contentDescription = "Clipboard History (Win + V)",
-                            tint = if (isClipboardHistoryOpen) {
-                                MaterialTheme.colorScheme.onPrimaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                            modifier = Modifier.size(17.dp)
-                        )
-                    }
-                }
+                TaskbarUtilityIconButton(
+                    icon = DesktopIcons.Clipboard,
+                    contentDescription = "Clipboard History (Win + V)",
+                    isActive = isClipboardHistoryOpen,
+                    onClick = onToggleClipboardHistory
+                )
 
                 Spacer(modifier = Modifier.width(6.dp))
 
                 // Phone Soft Keyboard Relay Button
-                Surface(
-                    onClick = onToggleSoftKeyboard,
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    modifier = Modifier.size(38.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = DesktopIcons.Keyboard,
-                            contentDescription = "Phone Soft Keyboard Relay",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
+                TaskbarUtilityIconButton(
+                    icon = DesktopIcons.Keyboard,
+                    contentDescription = "Phone Soft Keyboard Relay",
+                    isActive = false,
+                    onClick = onToggleSoftKeyboard
+                )
 
                 Spacer(modifier = Modifier.width(6.dp))
 
                 // Notification Center Trigger Pill with Live Badge
+                val notifHover = remember { MutableInteractionSource() }
+                val isNotifHovered by notifHover.collectIsHoveredAsState()
                 Surface(
                     onClick = onToggleNotificationCenter,
                     shape = RoundedCornerShape(12.dp),
-                    color = if (isNotificationCenterOpen) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    color = when {
+                        isNotificationCenterOpen -> MaterialTheme.colorScheme.primaryContainer
+                        isNotifHovered -> MaterialTheme.colorScheme.surfaceContainerHighest
+                        else -> MaterialTheme.colorScheme.surfaceContainerHigh
                     },
-                    modifier = Modifier.height(38.dp)
+                    modifier = Modifier
+                        .height(38.dp)
+                        .hoverable(notifHover)
+                        .pointerHoverIcon(PointerIcon.Hand)
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 10.dp),
@@ -1369,15 +1381,20 @@ private fun DesktopTaskbar(
                 Spacer(modifier = Modifier.width(6.dp))
 
                 // System Tray Quick Settings Pill
+                val trayHover = remember { MutableInteractionSource() }
+                val isTrayHovered by trayHover.collectIsHoveredAsState()
                 Surface(
                     onClick = onToggleSystemTray,
                     shape = RoundedCornerShape(14.dp),
-                    color = if (isSystemTrayOpen) {
-                        MaterialTheme.colorScheme.secondaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    color = when {
+                        isSystemTrayOpen -> MaterialTheme.colorScheme.secondaryContainer
+                        isTrayHovered -> MaterialTheme.colorScheme.surfaceContainerHighest
+                        else -> MaterialTheme.colorScheme.surfaceContainerHigh
                     },
-                    modifier = Modifier.height(40.dp)
+                    modifier = Modifier
+                        .height(40.dp)
+                        .hoverable(trayHover)
+                        .pointerHoverIcon(PointerIcon.Hand)
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 12.dp),
@@ -1569,6 +1586,54 @@ private fun TaskbarClockReadout() {
     }
 }
 
+@Composable
+private fun TaskbarUtilityIconButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    isActive: Boolean,
+    onClick: () -> Unit
+) {
+    val hoverSource = remember { MutableInteractionSource() }
+    val isHovered by hoverSource.collectIsHoveredAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isHovered) 1.06f else 1.0f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "utilityIconScale"
+    )
+    val bgColor by animateColorAsState(
+        targetValue = when {
+            isActive -> MaterialTheme.colorScheme.primaryContainer
+            isHovered -> MaterialTheme.colorScheme.surfaceContainerHighest
+            else -> MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        label = "utilityIconBg"
+    )
+
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = bgColor,
+        modifier = Modifier
+            .size(38.dp)
+            .scale(scale)
+            .hoverable(hoverSource)
+            .pointerHoverIcon(PointerIcon.Hand)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = if (isActive) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                modifier = Modifier.size(17.dp)
+            )
+        }
+    }
+}
+
 private data class DockAppEntry(
     val packageName: String,
     val label: String,
@@ -1584,9 +1649,10 @@ private data class DockAppEntry(
 private fun TaskbarAppButton(
     entry: DockAppEntry,
     onClick: () -> Unit,
-    onSnap: (WindowSnapMode) -> Unit,
+    onSnap: (WindowSnapMode?) -> Unit,
     onMinimize: () -> Unit,
     onTogglePin: () -> Unit,
+    onOpenAppInfo: () -> Unit,
     onCloseRecord: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -1594,16 +1660,26 @@ private fun TaskbarAppButton(
     var menuOpen by remember { mutableStateOf(false) }
 
     val scale by animateFloatAsState(
-        targetValue = if (isHovered) 1.05f else 1.0f,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        targetValue = when {
+            isHovered -> 1.06f
+            entry.isMinimized -> 0.96f
+            else -> 1.0f
+        },
+        animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow),
         label = "taskbarBtnScale"
+    )
+
+    val iconOffsetY by animateDpAsState(
+        targetValue = if (entry.isMinimized) 2.dp else 0.dp,
+        animationSpec = spring(dampingRatio = 0.68f, stiffness = Spring.StiffnessMediumLow),
+        label = "taskbarIconOffsetY"
     )
 
     val indicatorWidth by animateDpAsState(
         targetValue = when {
             entry.isFocused -> 22.dp
             entry.isRunning && !entry.isMinimized -> 10.dp
-            entry.isMinimized -> 4.dp
+            entry.isMinimized -> 5.dp
             else -> 0.dp
         },
         animationSpec = spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow),
@@ -1612,15 +1688,15 @@ private fun TaskbarAppButton(
 
     val targetBg = when {
         entry.isFocused -> MaterialTheme.colorScheme.secondaryContainer
-        isHovered -> MaterialTheme.colorScheme.surfaceContainerHighest
+        isHovered || menuOpen -> MaterialTheme.colorScheme.surfaceContainerHighest
         entry.isRunning && !entry.isMinimized -> MaterialTheme.colorScheme.surfaceContainerHigh
-        entry.isMinimized -> MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.45f)
+        entry.isMinimized -> MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.48f)
         else -> Color.Transparent
     }
     val animatedBg by animateColorAsState(targetBg, label = "taskbarBtnBg")
 
     val iconAlpha by animateFloatAsState(
-        targetValue = if (entry.isMinimized) 0.58f else 1.0f,
+        targetValue = if (entry.isMinimized && !isHovered) 0.58f else 1.0f,
         label = "taskbarIconAlpha"
     )
 
@@ -1631,6 +1707,7 @@ private fun TaskbarAppButton(
                 .scale(scale)
                 .clip(RoundedCornerShape(12.dp))
                 .hoverable(interactionSource)
+                .pointerHoverIcon(PointerIcon.Hand)
                 .background(animatedBg)
                 .desktopSecondaryClick { menuOpen = true }
                 .combinedClickable(
@@ -1641,7 +1718,10 @@ private fun TaskbarAppButton(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.offset(y = iconOffsetY),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 if (entry.iconBitmap != null) {
                     Image(
                         bitmap = entry.iconBitmap,
@@ -1674,7 +1754,7 @@ private fun TaskbarAppButton(
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = if (entry.isFocused) FontWeight.SemiBold else FontWeight.Normal,
                         color = if (entry.isMinimized) {
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
                         } else {
                             MaterialTheme.colorScheme.onSurface
                         },
@@ -1693,7 +1773,7 @@ private fun TaskbarAppButton(
                         .background(
                             when {
                                 entry.isFocused -> MaterialTheme.colorScheme.primary
-                                entry.isMinimized -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+                                entry.isMinimized -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
                                 else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
                             }
                         )
@@ -1705,23 +1785,64 @@ private fun TaskbarAppButton(
             expanded = menuOpen,
             onDismissRequest = { menuOpen = false }
         ) {
-            if (entry.isMinimized) {
-                DropdownMenuItem(
-                    text = { Text("Restore Window") },
-                    leadingIcon = { Icon(DesktopIcons.Maximize, null, Modifier.size(18.dp)) },
-                    onClick = { menuOpen = false; onClick() }
-                )
-            } else if (entry.isRunning) {
-                DropdownMenuItem(
-                    text = { Text("Minimize to Taskbar") },
-                    leadingIcon = { Icon(DesktopIcons.Minimize, null, Modifier.size(18.dp)) },
-                    onClick = { menuOpen = false; onMinimize() }
-                )
+            when {
+                !entry.isRunning -> {
+                    DropdownMenuItem(
+                        text = { Text("Open", fontWeight = FontWeight.SemiBold) },
+                        leadingIcon = { Icon(DesktopIcons.AppsGrid, null, Modifier.size(18.dp)) },
+                        onClick = { menuOpen = false; onSnap(null) }
+                    )
+                }
+                entry.isMinimized -> {
+                    DropdownMenuItem(
+                        text = { Text("Restore Window", fontWeight = FontWeight.SemiBold) },
+                        leadingIcon = { Icon(DesktopIcons.RestoreWindow, null, Modifier.size(18.dp)) },
+                        onClick = { menuOpen = false; onClick() }
+                    )
+                }
+                else -> {
+                    DropdownMenuItem(
+                        text = { Text("Minimize to Taskbar") },
+                        leadingIcon = { Icon(DesktopIcons.Minimize, null, Modifier.size(18.dp)) },
+                        onClick = { menuOpen = false; onMinimize() }
+                    )
+                }
             }
             DropdownMenuItem(
                 text = { Text(if (entry.isPinned) "Unpin from Taskbar" else "Pin to Taskbar") },
                 leadingIcon = { Icon(DesktopIcons.Pin, null, Modifier.size(18.dp)) },
                 onClick = { menuOpen = false; onTogglePin() }
+            )
+            DropdownMenuItem(
+                text = { Text("App Info") },
+                leadingIcon = { Icon(DesktopIcons.Info, null, Modifier.size(18.dp)) },
+                onClick = { menuOpen = false; onOpenAppInfo() }
+            )
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text("Portrait Window (9:19)") },
+                leadingIcon = { Icon(DesktopIcons.PhonePortrait, null, Modifier.size(18.dp)) },
+                onClick = { menuOpen = false; onSnap(WindowSnapMode.PORTRAIT_CONTAINER) }
+            )
+            DropdownMenuItem(
+                text = { Text("Landscape Container (16:10)") },
+                leadingIcon = { Icon(DesktopIcons.AspectLandscape, null, Modifier.size(18.dp)) },
+                onClick = { menuOpen = false; onSnap(WindowSnapMode.LANDSCAPE_CONTAINER) }
+            )
+            DropdownMenuItem(
+                text = { Text("Maximize Widescreen") },
+                leadingIcon = { Icon(DesktopIcons.Maximize, null, Modifier.size(18.dp)) },
+                onClick = { menuOpen = false; onSnap(WindowSnapMode.MAXIMIZED) }
+            )
+            DropdownMenuItem(
+                text = { Text("Snap Left Half (50%)") },
+                leadingIcon = { Icon(DesktopIcons.SplitLeft, null, Modifier.size(18.dp)) },
+                onClick = { menuOpen = false; onSnap(WindowSnapMode.LEFT_HALF) }
+            )
+            DropdownMenuItem(
+                text = { Text("Snap Right Half (50%)") },
+                leadingIcon = { Icon(DesktopIcons.SplitRight, null, Modifier.size(18.dp)) },
+                onClick = { menuOpen = false; onSnap(WindowSnapMode.RIGHT_HALF) }
             )
             if (entry.isRunning) {
                 HorizontalDivider()

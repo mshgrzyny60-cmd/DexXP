@@ -81,10 +81,19 @@ class PointerFocusBridge(
     private var activeDragTargetIsShell: Boolean = false
 
     @Volatile
+    private var activeDragTargetIsTitlebar: Boolean = false
+
+    @Volatile
     private var dragOriginX: Float = 0f
 
     @Volatile
     private var dragOriginY: Float = 0f
+
+    @Volatile
+    private var lastHardwareX: Float = 960f
+
+    @Volatile
+    private var lastHardwareY: Float = 540f
 
     // Pre-allocated reusable buffers eliminating 120-240Hz pointer hover/drag GC churn
     private val dispatchLock = Any()
@@ -100,6 +109,8 @@ class PointerFocusBridge(
     fun configureDisplayDimensions(widthPx: Int, heightPx: Int) {
         val safeW = widthPx.coerceAtLeast(320)
         val safeH = heightPx.coerceAtLeast(240)
+        lastHardwareX = if (_pointerState.value.lastInteractionMs == 0L) safeW / 2f else lastHardwareX.coerceIn(0f, safeW - 1f)
+        lastHardwareY = if (_pointerState.value.lastInteractionMs == 0L) safeH / 2f else lastHardwareY.coerceIn(0f, safeH - 1f)
         _pointerState.update { current ->
             current.copy(
                 x = if (current.lastInteractionMs == 0L) safeW / 2f else current.x.coerceIn(0f, safeW - 1f),
@@ -165,6 +176,7 @@ class PointerFocusBridge(
         externalWindowBounds = emptyList()
         _detectedExternalFrames.value = emptyList()
         activeDragTargetIsShell = false
+        activeDragTargetIsTitlebar = false
         snappingController.clearPreview()
         sessionRepository.updateExternalWindowVisibility(
             hasVisibleExternalApp = false,
@@ -304,26 +316,40 @@ class PointerFocusBridge(
             val activeId = sessionRepository.activeDisplay.value?.displayId
             if (activeId != null && activeId != sourceDisplayId) return
         }
+        val snapshot = _pointerState.value
+        val maxX = (snapshot.displayWidth - 1).coerceAtLeast(1).toFloat()
+        val maxY = (snapshot.displayHeight - 1).coerceAtLeast(1).toFloat()
+        val nx = screenX.coerceIn(0f, maxX)
+        val ny = screenY.coerceIn(0f, maxY)
+        lastHardwareX = nx
+        lastHardwareY = ny
+
+        // Fast-path: when a physical/scrcpy mouse is hovering without button transitions,
+        // skip StateFlow copy/emission completely to eliminate 120-240Hz main-thread snapshot churn.
+        if (snapshot.isHardwarePointer && snapshot.visible &&
+            snapshot.isPrimaryDown == isDown && !snapshot.isDragging
+        ) {
+            return
+        }
+
         val now = SystemClock.uptimeMillis()
         _pointerState.update { current ->
-            val maxX = (current.displayWidth - 1).coerceAtLeast(1).toFloat()
-            val maxY = (current.displayHeight - 1).coerceAtLeast(1).toFloat()
-            val nx = screenX.coerceIn(0f, maxX)
-            val ny = screenY.coerceIn(0f, maxY)
-            if (nx == current.x && ny == current.y && current.isPrimaryDown == isDown &&
-                current.visible && current.isHardwarePointer
-            ) {
-                current
-            } else {
-                current.copy(
-                    x = nx,
-                    y = ny,
-                    visible = true,
-                    isPrimaryDown = isDown,
-                    lastInteractionMs = now,
-                    isHardwarePointer = true
-                )
-            }
+            current.copy(
+                x = nx,
+                y = ny,
+                visible = true,
+                isPrimaryDown = isDown,
+                lastInteractionMs = now,
+                isHardwarePointer = true
+            )
+        }
+    }
+
+    private fun currentEffectiveCoordinates(state: PointerState): Pair<Float, Float> {
+        return if (state.isHardwarePointer) {
+            lastHardwareX to lastHardwareY
+        } else {
+            state.x to state.y
         }
     }
 
@@ -336,8 +362,10 @@ class PointerFocusBridge(
         _pointerState.update { current ->
             val maxX = (current.displayWidth - 1).coerceAtLeast(1).toFloat()
             val maxY = (current.displayHeight - 1).coerceAtLeast(1).toFloat()
-            val clampedX = (current.x + deltaX * sensitivity).coerceIn(0f, maxX)
-            val clampedY = (current.y + deltaY * sensitivity).coerceIn(0f, maxY)
+            val baseX = if (current.isHardwarePointer) lastHardwareX else current.x
+            val baseY = if (current.isHardwarePointer) lastHardwareY else current.y
+            val clampedX = (baseX + deltaX * sensitivity).coerceIn(0f, maxX)
+            val clampedY = (baseY + deltaY * sensitivity).coerceIn(0f, maxY)
             if (clampedX == current.x && clampedY == current.y && current.visible &&
                 !current.isDragging && !current.isHardwarePointer
             ) {
@@ -357,6 +385,24 @@ class PointerFocusBridge(
         }
 
         val state = nextState ?: return
+        if (state.isDragging && activeDragTargetIsTitlebar) {
+            val reg = titlebarOverlayTarget
+            val bounds = reg?.screenBoundsProvider()
+            if (reg != null && bounds != null) {
+                reusableTitlebarBounds.set(bounds)
+                dispatchMouseMotionToOverlayView(
+                    registration = reg,
+                    bounds = reusableTitlebarBounds,
+                    action = MotionEvent.ACTION_MOVE,
+                    screenX = state.x,
+                    screenY = state.y,
+                    buttonState = MotionEvent.BUTTON_PRIMARY,
+                    downTime = activeDownTimeMs
+                )
+                return
+            }
+        }
+
         if (state.isDragging && !activeDragTargetIsShell) {
             snappingController.onPointerDragMoved(
                 x = state.x,
@@ -404,20 +450,20 @@ class PointerFocusBridge(
     }
 
     fun performPrimaryClick() {
-        val state = _pointerState.value
+        val (px, py) = currentEffectiveCoordinates(_pointerState.value)
         val now = SystemClock.uptimeMillis()
         _pointerState.update {
-            it.copy(visible = true, isPrimaryDown = true, lastInteractionMs = now, isHardwarePointer = false)
+            it.copy(x = px, y = py, visible = true, isPrimaryDown = true, lastInteractionMs = now, isHardwarePointer = false)
         }
 
-        val titlebarHit = resolveTitlebarOverlayAt(state.x, state.y, reusableTitlebarBounds)
+        val titlebarHit = resolveTitlebarOverlayAt(px, py, reusableTitlebarBounds)
         if (titlebarHit != null) {
             dispatchMouseMotionToOverlayView(
                 titlebarHit,
                 reusableTitlebarBounds,
                 MotionEvent.ACTION_DOWN,
-                state.x,
-                state.y,
+                px,
+                py,
                 MotionEvent.BUTTON_PRIMARY,
                 now
             )
@@ -425,8 +471,8 @@ class PointerFocusBridge(
                 titlebarHit,
                 reusableTitlebarBounds,
                 MotionEvent.ACTION_UP,
-                state.x,
-                state.y,
+                px,
+                py,
                 0,
                 now
             )
@@ -434,17 +480,17 @@ class PointerFocusBridge(
             return
         }
 
-        val shellTarget = resolveShellTargetAt(state.x, state.y)
+        val shellTarget = resolveShellTargetAt(px, py)
         if (shellTarget != null) {
-            dispatchMouseMotionToShell(shellTarget, MotionEvent.ACTION_DOWN, state.x, state.y, MotionEvent.BUTTON_PRIMARY, now)
-            dispatchMouseMotionToShell(shellTarget, MotionEvent.ACTION_UP, state.x, state.y, 0, now)
+            dispatchMouseMotionToShell(shellTarget, MotionEvent.ACTION_DOWN, px, py, MotionEvent.BUTTON_PRIMARY, now)
+            dispatchMouseMotionToShell(shellTarget, MotionEvent.ACTION_UP, px, py, 0, now)
         } else {
             val displayId = sessionRepository.activeDisplay.value?.displayId
             if (displayId != null) {
                 DesktopPointerAccessibilityService.instance?.dispatchTapOnDisplay(
                     displayId = displayId,
-                    x = state.x,
-                    y = state.y,
+                    x = px,
+                    y = py,
                     durationMs = 48L
                 )
             }
@@ -454,24 +500,24 @@ class PointerFocusBridge(
     }
 
     fun performSecondaryClick() {
-        val state = _pointerState.value
+        val (px, py) = currentEffectiveCoordinates(_pointerState.value)
         val now = SystemClock.uptimeMillis()
         _pointerState.update {
-            it.copy(visible = true, isSecondaryDown = true, lastInteractionMs = now, isHardwarePointer = false)
+            it.copy(x = px, y = py, visible = true, isSecondaryDown = true, lastInteractionMs = now, isHardwarePointer = false)
         }
 
-        val shellTarget = resolveShellTargetAt(state.x, state.y)
+        val shellTarget = resolveShellTargetAt(px, py)
         if (shellTarget != null) {
-            _rightClickEvents.tryEmit(SecondaryRightClickEvent(state.x, state.y, now))
-            dispatchMouseMotionToShell(shellTarget, MotionEvent.ACTION_DOWN, state.x, state.y, MotionEvent.BUTTON_SECONDARY, now)
-            dispatchMouseMotionToShell(shellTarget, MotionEvent.ACTION_UP, state.x, state.y, 0, now)
+            _rightClickEvents.tryEmit(SecondaryRightClickEvent(px, py, now))
+            dispatchMouseMotionToShell(shellTarget, MotionEvent.ACTION_DOWN, px, py, MotionEvent.BUTTON_SECONDARY, now)
+            dispatchMouseMotionToShell(shellTarget, MotionEvent.ACTION_UP, px, py, 0, now)
         } else {
             val displayId = sessionRepository.activeDisplay.value?.displayId
             if (displayId != null) {
                 DesktopPointerAccessibilityService.instance?.dispatchTapOnDisplay(
                     displayId = displayId,
-                    x = state.x,
-                    y = state.y,
+                    x = px,
+                    y = py,
                     durationMs = 520L
                 )
             }
@@ -481,17 +527,47 @@ class PointerFocusBridge(
     }
 
     fun beginDrag() {
-        val state = _pointerState.value
+        val (px, py) = currentEffectiveCoordinates(_pointerState.value)
         val now = SystemClock.uptimeMillis()
         activeDownTimeMs = now
-        dragOriginX = state.x
-        dragOriginY = state.y
+        dragOriginX = px
+        dragOriginY = py
 
-        val shellTarget = resolveShellTargetAt(state.x, state.y)
+        val titlebarHit = resolveTitlebarOverlayAt(px, py, reusableTitlebarBounds)
+        if (titlebarHit != null) {
+            activeDragTargetIsTitlebar = true
+            activeDragTargetIsShell = false
+            _pointerState.update {
+                it.copy(
+                    x = px,
+                    y = py,
+                    isPrimaryDown = true,
+                    isDragging = true,
+                    visible = true,
+                    lastInteractionMs = now,
+                    isHardwarePointer = false
+                )
+            }
+            dispatchMouseMotionToOverlayView(
+                registration = titlebarHit,
+                bounds = reusableTitlebarBounds,
+                action = MotionEvent.ACTION_DOWN,
+                screenX = px,
+                screenY = py,
+                buttonState = MotionEvent.BUTTON_PRIMARY,
+                downTime = now
+            )
+            return
+        }
+
+        activeDragTargetIsTitlebar = false
+        val shellTarget = resolveShellTargetAt(px, py)
         activeDragTargetIsShell = shellTarget != null
 
         _pointerState.update {
             it.copy(
+                x = px,
+                y = py,
                 isPrimaryDown = true,
                 isDragging = true,
                 visible = true,
@@ -504,8 +580,8 @@ class PointerFocusBridge(
             dispatchMouseMotionToShell(
                 registration = shellTarget,
                 action = MotionEvent.ACTION_DOWN,
-                screenX = state.x,
-                screenY = state.y,
+                screenX = px,
+                screenY = py,
                 buttonState = MotionEvent.BUTTON_PRIMARY,
                 downTime = now
             )
@@ -516,7 +592,24 @@ class PointerFocusBridge(
         val state = _pointerState.value
         if (!state.isDragging) return
 
-        if (activeDragTargetIsShell) {
+        if (activeDragTargetIsTitlebar) {
+            val reg = titlebarOverlayTarget
+            val bounds = reg?.screenBoundsProvider()
+            if (reg != null && bounds != null) {
+                reusableTitlebarBounds.set(bounds)
+                dispatchMouseMotionToOverlayView(
+                    registration = reg,
+                    bounds = reusableTitlebarBounds,
+                    action = MotionEvent.ACTION_UP,
+                    screenX = state.x,
+                    screenY = state.y,
+                    buttonState = 0,
+                    downTime = activeDownTimeMs
+                )
+            }
+            activeDragTargetIsTitlebar = false
+            snappingController.clearPreview()
+        } else if (activeDragTargetIsShell) {
             resolveShellTargetAt(state.x, state.y)?.let { target ->
                 dispatchMouseMotionToShell(
                     registration = target,
@@ -554,6 +647,7 @@ class PointerFocusBridge(
         }
 
         activeDragTargetIsShell = false
+        activeDragTargetIsTitlebar = false
         _pointerState.update {
             it.copy(
                 isPrimaryDown = false,
@@ -564,20 +658,20 @@ class PointerFocusBridge(
     }
 
     fun performScroll(verticalDelta: Float, horizontalDelta: Float) {
-        val state = _pointerState.value
+        val (px, py) = currentEffectiveCoordinates(_pointerState.value)
         val now = SystemClock.uptimeMillis()
-        _pointerState.update { it.copy(visible = true, lastInteractionMs = now) }
+        _pointerState.update { it.copy(x = px, y = py, visible = true, lastInteractionMs = now) }
 
-        val shellTarget = resolveShellTargetAt(state.x, state.y)
+        val shellTarget = resolveShellTargetAt(px, py)
         if (shellTarget != null) {
-            dispatchMouseScrollToShell(shellTarget, state.x, state.y, verticalDelta, horizontalDelta)
+            dispatchMouseScrollToShell(shellTarget, px, py, verticalDelta, horizontalDelta)
         } else {
             val displayId = sessionRepository.activeDisplay.value?.displayId
             if (displayId != null) {
                 DesktopPointerAccessibilityService.instance?.dispatchScrollSwipeOnDisplay(
                     displayId = displayId,
-                    centerX = state.x,
-                    centerY = state.y,
+                    centerX = px,
+                    centerY = py,
                     scrollDeltaX = horizontalDelta * 110f,
                     scrollDeltaY = verticalDelta * 110f
                 )

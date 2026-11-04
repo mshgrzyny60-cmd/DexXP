@@ -105,7 +105,8 @@ data class DesktopAppItem(
     val label: String,
     val category: AppCategory,
     val iconBitmap: ImageBitmap?,
-    val isSystemApp: Boolean
+    val isSystemApp: Boolean,
+    val isPortraitLocked: Boolean = false
 ) {
     val componentName: ComponentName
         get() = ComponentName(packageName, activityName)
@@ -115,10 +116,23 @@ data class DesktopAppItem(
 }
 
 /**
+ * Per-application launch container override persisted across desktop sessions.
+ */
+enum class AppWindowLaunchPolicy(val label: String) {
+    AUTO("Smart Auto"),
+    PORTRAIT_WINDOW("Floating Portrait (9:19)"),
+    LANDSCAPE_WINDOW("Landscape Container (16:10)"),
+    FREEFORM_WINDOW("Resizable Freeform"),
+    MAXIMIZED_WIDESCREEN("Full Widescreen")
+}
+
+/**
  * Window placement & tiling presets for Freeform Multi-Window launching and edge/corner snapping.
  */
 enum class WindowSnapMode(val label: String) {
     FREEFORM_CASCADED("Freeform Window"),
+    PORTRAIT_CONTAINER("Portrait Window"),
+    LANDSCAPE_CONTAINER("Landscape Container"),
     LEFT_HALF("Snap Left 50%"),
     RIGHT_HALF("Snap Right 50%"),
     MAXIMIZED("Maximize Work Area"),
@@ -126,7 +140,10 @@ enum class WindowSnapMode(val label: String) {
     TOP_RIGHT_QUADRANT("Top-Right 25%"),
     BOTTOM_LEFT_QUADRANT("Bottom-Left 25%"),
     BOTTOM_RIGHT_QUADRANT("Bottom-Right 25%"),
-    COMPACT_UTILITY("Compact Utility")
+    COMPACT_UTILITY("Compact Utility");
+
+    val usesFreeformContainer: Boolean
+        get() = this != MAXIMIZED
 }
 
 /**

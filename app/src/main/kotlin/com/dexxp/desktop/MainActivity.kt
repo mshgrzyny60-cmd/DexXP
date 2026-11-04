@@ -43,6 +43,7 @@ class MainActivity : ComponentActivity() {
         ensurePermissionsAndStartEngine()
 
         val app = application as DexXpApplication
+        app.phoneScreenPowerController.bindPhoneWindow(window)
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -77,6 +78,11 @@ class MainActivity : ComponentActivity() {
         app.sessionRepository.refreshSystemReadiness()
         app.clipboardManager.syncCurrentPrimaryClip()
         app.phoneHubController.refreshTelephonyCallbackRegistration()
+    }
+
+    override fun onDestroy() {
+        (application as DexXpApplication).phoneScreenPowerController.unbindPhoneWindow(window)
+        super.onDestroy()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

@@ -3,6 +3,7 @@ package com.dexxp.desktop.state
 import android.content.Context
 import android.graphics.Rect
 import android.net.Uri
+import com.dexxp.desktop.model.AppWindowLaunchPolicy
 import com.dexxp.desktop.model.DesktopDpiScale
 import com.dexxp.desktop.model.DesktopEnvironmentMode
 import com.dexxp.desktop.model.DesktopNotificationItem
@@ -154,6 +155,9 @@ class DesktopSessionRepository(context: Context) {
     )
     val desktopShortcutPackages: StateFlow<Set<String>> = _desktopShortcutPackages.asStateFlow()
 
+    private val _appWindowPolicies = MutableStateFlow(loadSavedAppWindowPolicies())
+    val appWindowPolicies: StateFlow<Map<String, AppWindowLaunchPolicy>> = _appWindowPolicies.asStateFlow()
+
     private val _systemReadiness = MutableStateFlow(SystemFlagsInspector.inspect(appContext))
     val systemReadiness: StateFlow<SystemReadinessStatus> = _systemReadiness.asStateFlow()
 
@@ -211,6 +215,9 @@ class DesktopSessionRepository(context: Context) {
         if (info == null) {
             dismissFlyouts()
             _snapPreview.value = null
+            _launchingPackage.value = null
+            _manualKeyboardRelayOpen.value = false
+            _externalTextInputState.value = ExternalTextInputState()
             _externalAppVisibleOnDisplay.value = false
         }
     }
@@ -576,6 +583,45 @@ class DesktopSessionRepository(context: Context) {
         }
     }
 
+    fun getAppWindowPolicy(packageName: String): AppWindowLaunchPolicy {
+        return _appWindowPolicies.value[packageName] ?: AppWindowLaunchPolicy.AUTO
+    }
+
+    fun setAppWindowPolicy(packageName: String, policy: AppWindowLaunchPolicy) {
+        _appWindowPolicies.update { current ->
+            val next = if (policy == AppWindowLaunchPolicy.AUTO) {
+                current - packageName
+            } else {
+                current + (packageName to policy)
+            }
+            val encoded = next.entries.map { "${it.key}=${it.value.name}" }.toSet()
+            prefs.edit().putStringSet(KEY_APP_WINDOW_POLICIES, encoded).apply()
+            next
+        }
+    }
+
+    fun updateWindowBoundsAndSnap(
+        packageName: String,
+        bounds: Rect,
+        snapMode: WindowSnapMode
+    ) {
+        _runningWindows.update { list ->
+            list.map { rec ->
+                if (rec.packageName == packageName) {
+                    rec.copy(
+                        bounds = Rect(bounds),
+                        snapMode = snapMode,
+                        isFocused = true,
+                        isMinimized = false,
+                        lastActiveEpochMs = System.currentTimeMillis()
+                    )
+                } else {
+                    rec.copy(isFocused = false)
+                }
+            }
+        }
+    }
+
     fun setEnvironmentMode(mode: DesktopEnvironmentMode) {
         _environmentMode.value = mode
         prefs.edit().putString(KEY_ENVIRONMENT_MODE, mode.name).apply()
@@ -613,6 +659,23 @@ class DesktopSessionRepository(context: Context) {
         return prefs.getStringSet(key, null)?.toSet() ?: defaults
     }
 
+    private fun loadSavedAppWindowPolicies(): Map<String, AppWindowLaunchPolicy> {
+        val raw = prefs.getStringSet(KEY_APP_WINDOW_POLICIES, emptySet()) ?: emptySet()
+        if (raw.isEmpty()) return emptyMap()
+        val out = HashMap<String, AppWindowLaunchPolicy>(raw.size)
+        for (entry in raw) {
+            val idx = entry.indexOf('=')
+            if (idx <= 0 || idx >= entry.length - 1) continue
+            val pkg = entry.substring(0, idx)
+            val name = entry.substring(idx + 1)
+            val policy = AppWindowLaunchPolicy.entries.firstOrNull { it.name == name }
+            if (policy != null && policy != AppWindowLaunchPolicy.AUTO) {
+                out[pkg] = policy
+            }
+        }
+        return out
+    }
+
     fun shutdown() {
         scope.cancel()
     }
@@ -628,6 +691,7 @@ class DesktopSessionRepository(context: Context) {
         private const val KEY_TOUCHPAD_SENSITIVITY = "touchpad_sensitivity"
         private const val KEY_EXTERNAL_BRIGHTNESS = "external_brightness"
         private const val KEY_CUSTOM_DESKTOP_URI = "custom_desktop_tree_uri"
+        private const val KEY_APP_WINDOW_POLICIES = "app_window_policies"
 
         private val DEFAULT_PINNED = setOf(
             "com.android.chrome",

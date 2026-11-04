@@ -125,7 +125,8 @@ class DisplayRouterService : Service() {
             sessionRepository = dexApp.sessionRepository,
             appRepository = dexApp.appRepository,
             appLauncher = dexApp.appLauncher,
-            pointerFocusBridge = dexApp.pointerFocusBridge
+            pointerFocusBridge = dexApp.pointerFocusBridge,
+            snappingController = dexApp.snappingController
         )
 
         ensureNotificationChannel()
@@ -162,8 +163,20 @@ class DisplayRouterService : Service() {
 
     override fun onBind(intent: Intent?): IBinder = binder
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        val activeId = attachedDisplayId
+        if (activeId != Display.INVALID_DISPLAY) {
+            val active = displayManager.getDisplay(activeId)
+            if (active == null || !active.isValid) {
+                teardownActivePresentation()
+            }
+        }
+    }
+
     override fun onDestroy() {
-        displayManager.unregisterDisplayListener(displayListener)
+        mainHandler.removeCallbacksAndMessages(null)
+        runCatching { displayManager.unregisterDisplayListener(displayListener) }
         teardownActivePresentation()
         serviceScope.cancel()
         super.onDestroy()
@@ -267,7 +280,7 @@ class DisplayRouterService : Service() {
             refreshRateHz = refreshHz,
             nativeDensityDpi = metrics.densityDpi,
             scaledDensityDpi = targetDpi,
-            transportType = classifyDisplayTransport(display),
+            transportType = transport,
             isHdrSupported = isHdr
         )
 
@@ -307,6 +320,8 @@ class DisplayRouterService : Service() {
             presentation.show()
             activePresentation = presentation
             attachedDisplayId = display.displayId
+            // Attach 28dp non-overlapping floating titlebar above Freeform / Portrait Container windows
+            titlebarOverlayController.attachToDisplay(display, scaledDisplayContext)
             // Top-most cursor HUD overlay above desktop (only for physical HDMI/DP monitors, skip on scrcpy virtual displays to prevent clickjacking touch drops)
             if (info.transportType != DisplayTransportType.SCRCPY_VIRTUAL_DISPLAY) {
                 cursorOverlayController.attachToDisplay(display)

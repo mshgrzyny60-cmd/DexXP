@@ -55,6 +55,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.lang.ref.WeakReference
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -87,6 +88,9 @@ class PhoneScreenPowerController(
     @Volatile
     private var userWokeManuallyDuringSession = false
 
+    @Volatile
+    private var attachedPhoneWindowRef: WeakReference<Window>? = null
+
     private val inputDeviceListener = object : InputManager.InputDeviceListener {
         override fun onInputDeviceAdded(deviceId: Int) {
             val wasConnected = _externalMouseName.value != null
@@ -116,10 +120,34 @@ class PhoneScreenPowerController(
         inputManager?.registerInputDeviceListener(inputDeviceListener, mainHandler)
     }
 
+    fun bindPhoneWindow(window: Window) {
+        attachedPhoneWindowRef = WeakReference(window)
+    }
+
+    fun unbindPhoneWindow(window: Window) {
+        val current = attachedPhoneWindowRef?.get()
+        if (current === window || current == null) {
+            runCatching { releaseWakeLockAndBrightness(window) }
+            attachedPhoneWindowRef = null
+        }
+    }
+
     fun onExternalDisplayStateChanged(attached: Boolean) {
         if (!attached) {
             userWokeManuallyManuallyReset()
             _isBlackoutActive.value = false
+            // Guarantee wake-lock (`FLAG_KEEP_SCREEN_ON`) and brightness override are cleared
+            // immediately even if MainActivity is currently STOPPED in the background.
+            val releaseTask = Runnable {
+                attachedPhoneWindowRef?.get()?.let { phoneWindow ->
+                    runCatching { releaseWakeLockAndBrightness(phoneWindow) }
+                }
+            }
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                releaseTask.run()
+            } else {
+                mainHandler.post(releaseTask)
+            }
         } else {
             _externalMouseName.value = scanPhysicalMouseName()
             maybeTriggerAutoBlackout()
@@ -185,6 +213,7 @@ class PhoneScreenPowerController(
      * AMOLED Blackout, restoring standard brightness and system bars instantly upon wake.
      */
     fun applyWindowPowerPolicy(window: Window, isBlackout: Boolean) {
+        attachedPhoneWindowRef = WeakReference(window)
         val hasExternalDisplay = sessionRepository.activeDisplay.value != null
         if (isBlackout || hasExternalDisplay) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -213,8 +242,24 @@ class PhoneScreenPowerController(
         }
     }
 
+    private fun releaseWakeLockAndBrightness(window: Window) {
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val lp = window.attributes
+        if (lp.screenBrightness != WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE) {
+            lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            window.attributes = lp
+        }
+        window.peekDecorView()?.let { decor ->
+            WindowInsetsControllerCompat(window, decor).show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
     fun shutdown() {
         runCatching { inputManager?.unregisterInputDeviceListener(inputDeviceListener) }
+        attachedPhoneWindowRef?.get()?.let { phoneWindow ->
+            mainHandler.post { runCatching { releaseWakeLockAndBrightness(phoneWindow) } }
+        }
+        attachedPhoneWindowRef = null
     }
 }
 

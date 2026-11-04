@@ -3,8 +3,12 @@ package com.dexxp.desktop.browser
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.graphics.Bitmap
+import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.Display
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -54,6 +58,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
@@ -81,10 +87,38 @@ class DesktopWebActivity : ComponentActivity() {
     private var customVideoView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     private var onHideCustomVideoAction: (() -> Unit)? = null
+    private var hostedDisplayId: Int = Display.INVALID_DISPLAY
+    private var displayManager: DisplayManager? = null
+
+    private val displayDisconnectListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) = Unit
+
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId == hostedDisplayId && hostedDisplayId != Display.DEFAULT_DISPLAY) {
+                val active = displayManager?.getDisplay(displayId)
+                if (active == null || !active.isValid) {
+                    teardownOnSecondaryDisplayDisconnect()
+                }
+            }
+        }
+
+        override fun onDisplayRemoved(displayId: Int) {
+            if (displayId == hostedDisplayId && hostedDisplayId != Display.DEFAULT_DISPLAY) {
+                teardownOnSecondaryDisplayDisconnect()
+            }
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        hostedDisplayId = display?.displayId ?: Display.DEFAULT_DISPLAY
+        if (hostedDisplayId != Display.DEFAULT_DISPLAY) {
+            displayManager = getSystemService(DisplayManager::class.java)?.also { dm ->
+                dm.registerDisplayListener(displayDisconnectListener, Handler(Looper.getMainLooper()))
+            }
+        }
 
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
@@ -172,9 +206,34 @@ class DesktopWebActivity : ComponentActivity() {
         return super.onKeyDown(keyCode, event)
     }
 
+    override fun onResume() {
+        super.onResume()
+        webView?.onResume()
+    }
+
+    override fun onPause() {
+        webView?.onPause()
+        super.onPause()
+    }
+
+    private fun teardownOnSecondaryDisplayDisconnect() {
+        if (isFinishing || isDestroyed) return
+        runCatching {
+            webView?.apply {
+                stopLoading()
+                onPause()
+                loadUrl("about:blank")
+            }
+        }
+        runCatching { finishAndRemoveTask() }.onFailure { finish() }
+    }
+
     override fun onDestroy() {
+        runCatching { displayManager?.unregisterDisplayListener(displayDisconnectListener) }
+        displayManager = null
         webView?.apply {
             stopLoading()
+            onPause()
             loadUrl("about:blank")
             clearHistory()
             removeAllViews()
@@ -252,7 +311,9 @@ private fun DesktopWebScreen(
                             onClick = { webViewRef?.goBack() },
                             enabled = canGoBack,
                             shape = CircleShape,
-                            modifier = Modifier.size(34.dp),
+                            modifier = Modifier
+                                .size(34.dp)
+                                .pointerHoverIcon(PointerIcon.Hand),
                             colors = IconButtonDefaults.filledTonalIconButtonColors(
                                 containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
                             )
@@ -264,7 +325,9 @@ private fun DesktopWebScreen(
                             onClick = { webViewRef?.goForward() },
                             enabled = canGoForward,
                             shape = CircleShape,
-                            modifier = Modifier.size(34.dp),
+                            modifier = Modifier
+                                .size(34.dp)
+                                .pointerHoverIcon(PointerIcon.Hand),
                             colors = IconButtonDefaults.filledTonalIconButtonColors(
                                 containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
                             )
@@ -278,7 +341,9 @@ private fun DesktopWebScreen(
                                 webViewRef?.reload()
                             },
                             shape = CircleShape,
-                            modifier = Modifier.size(34.dp),
+                            modifier = Modifier
+                                .size(34.dp)
+                                .pointerHoverIcon(PointerIcon.Hand),
                             colors = IconButtonDefaults.filledTonalIconButtonColors(
                                 containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
                             )
@@ -352,7 +417,9 @@ private fun DesktopWebScreen(
                         FilledTonalIconButton(
                             onClick = onClose,
                             shape = CircleShape,
-                            modifier = Modifier.size(34.dp),
+                            modifier = Modifier
+                                .size(34.dp)
+                                .pointerHoverIcon(PointerIcon.Hand),
                             colors = IconButtonDefaults.filledTonalIconButtonColors(
                                 containerColor = MaterialTheme.colorScheme.errorContainer,
                                 contentColor = MaterialTheme.colorScheme.onErrorContainer

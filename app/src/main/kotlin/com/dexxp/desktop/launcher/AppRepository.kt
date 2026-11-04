@@ -1,6 +1,7 @@
 package com.dexxp.desktop.launcher
 
 import android.content.Context
+import android.content.pm.ActivityInfo
 import android.content.pm.ApplicationInfo
 import android.content.pm.LauncherActivityInfo
 import android.content.pm.LauncherApps
@@ -123,6 +124,10 @@ class AppRepository(context: Context) {
                     val appInfo = info.applicationInfo
                     val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
                         (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
+                    val portraitLocked = pkg !in WIDESCREEN_DESKTOP_ALLOWLIST && runCatching {
+                        val actInfo = appContext.packageManager.getActivityInfo(info.componentName, 0)
+                        isPortraitLockedOrientation(actInfo.screenOrientation)
+                    }.getOrDefault(false)
 
                     items.add(
                         DesktopAppItem(
@@ -131,7 +136,8 @@ class AppRepository(context: Context) {
                             label = label,
                             category = classifyApp(pkg, label, appInfo),
                             iconBitmap = getOrRasterizeIcon(key, info),
-                            isSystemApp = isSystem
+                            isSystemApp = isSystem,
+                            isPortraitLocked = portraitLocked
                         )
                     )
                 }
@@ -221,6 +227,28 @@ class AppRepository(context: Context) {
     companion object {
         private const val ICON_SIZE_PX = 72
         private const val MAX_ICON_CACHE_BYTES = 4 * 1024 * 1024
+
+        fun isPortraitLockedOrientation(screenOrientation: Int): Boolean {
+            return screenOrientation == ActivityInfo.SCREEN_ORIENTATION_PORTRAIT ||
+                screenOrientation == ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT ||
+                screenOrientation == ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT ||
+                screenOrientation == ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
+        }
+
+        private val WIDESCREEN_DESKTOP_ALLOWLIST = setOf(
+            "com.android.chrome",
+            "org.mozilla.firefox",
+            "com.brave.browser",
+            "com.microsoft.emmx",
+            "com.google.android.youtube",
+            "org.videolan.vlc",
+            "com.android.settings",
+            "com.android.documentsui",
+            "com.google.android.apps.nbu.files",
+            "com.google.android.gm",
+            "com.google.android.calendar",
+            "com.termux"
+        )
 
         private val BROWSER_SOCIAL_HINTS = listOf(
             "chrome", "browser", "firefox", "brave", "opera", "edge", "webview",

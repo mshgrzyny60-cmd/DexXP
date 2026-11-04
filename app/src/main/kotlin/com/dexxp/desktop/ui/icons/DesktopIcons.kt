@@ -839,4 +839,65 @@ object DesktopIcons {
             }
         }
     }
+
+    val PhonePortrait: ImageVector by lazy {
+        symbol("PhonePortrait") {
+            path(
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 1.9f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(7.5f, 3f); lineTo(16.5f, 3f); lineTo(16.5f, 21f); lineTo(7.5f, 21f); close()
+                moveTo(10.5f, 18.2f); lineTo(13.5f, 18.2f)
+            }
+        }
+    }
+
+    val AspectLandscape: ImageVector by lazy {
+        symbol("AspectLandscape") {
+            path(
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 1.9f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(3f, 6f); lineTo(21f, 6f); lineTo(21f, 18f); lineTo(3f, 18f); close()
+                moveTo(6.5f, 10.5f); lineTo(6.5f, 8.5f); lineTo(8.5f, 8.5f)
+                moveTo(17.5f, 13.5f); lineTo(17.5f, 15.5f); lineTo(15.5f, 15.5f)
+            }
+        }
+    }
+
+    val ResizeHandle: ImageVector by lazy {
+        symbol("ResizeHandle") {
+            path(
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 1.9f,
+                strokeLineCap = StrokeCap.Round
+            ) {
+                moveTo(15f, 5f); lineTo(19f, 5f); lineTo(19f, 9f)
+                moveTo(9f, 19f); lineTo(5f, 19f); lineTo(5f, 15f)
+                moveTo(19f, 5f); lineTo(13.5f, 10.5f)
+                moveTo(5f, 19f); lineTo(10.5f, 13.5f)
+            }
+        }
+    }
+
+    val Info: ImageVector by lazy {
+        symbol("Info") {
+            path(
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(21f, 12f)
+                arcTo(9f, 9f, 0f, true, true, 3f, 12f)
+                arcTo(9f, 9f, 0f, true, true, 21f, 12f)
+                moveTo(12f, 11.2f); lineTo(12f, 16.2f)
+                moveTo(12f, 7.8f); lineTo(12.01f, 7.8f)
+            }
+        }
+    }
 }

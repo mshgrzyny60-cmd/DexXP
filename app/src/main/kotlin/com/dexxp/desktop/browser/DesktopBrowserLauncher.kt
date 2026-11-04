@@ -9,6 +9,9 @@ import android.provider.Browser
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,10 +31,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -301,15 +308,28 @@ fun DesktopWebAppsSection(
                 )
             }
 
+            val browserBtnHover = remember { MutableInteractionSource() }
+            val isBrowserBtnHovered by browserBtnHover.collectIsHoveredAsState()
             Surface(
                 onClick = onLaunchDesktopBrowser,
                 shape = RoundedCornerShape(50),
-                color = MaterialTheme.colorScheme.secondaryContainer
+                color = if (isBrowserBtnHovered) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.secondaryContainer
+                },
+                modifier = Modifier
+                    .hoverable(browserBtnHover)
+                    .pointerHoverIcon(PointerIcon.Hand)
             ) {
                 Text(
                     text = "New Desktop Browser",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    color = if (isBrowserBtnHovered) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSecondaryContainer
+                    },
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                 )
             }
@@ -321,13 +341,27 @@ fun DesktopWebAppsSection(
         ) {
             items(webApps, key = { it.id }) { app ->
                 val accent = Color(app.accentColorHex)
+                val cardHover = remember { MutableInteractionSource() }
+                val isCardHovered by cardHover.collectIsHoveredAsState()
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(14.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .hoverable(cardHover)
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .background(
+                            if (isCardHovered) {
+                                MaterialTheme.colorScheme.surfaceContainerHighest
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerHigh
+                            }
+                        )
                         .border(
                             width = 1.dp,
-                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f),
+                            color = if (isCardHovered) {
+                                accent.copy(alpha = 0.65f)
+                            } else {
+                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
+                            },
                             shape = RoundedCornerShape(14.dp)
                         )
                         .clickable { onLaunchWebApp(app) }

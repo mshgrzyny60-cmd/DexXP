@@ -1,14 +1,19 @@
 package com.dexxp.desktop
 
+import android.content.pm.ActivityInfo
 import com.dexxp.desktop.clipboard.DesktopClipboardManager
 import com.dexxp.desktop.command.CommandPaletteController
 import com.dexxp.desktop.continuity.PhoneHubController
+import com.dexxp.desktop.launcher.AppLauncher
+import com.dexxp.desktop.launcher.AppRepository
+import com.dexxp.desktop.model.AppWindowLaunchPolicy
 import com.dexxp.desktop.model.ClipboardItemKind
 import com.dexxp.desktop.model.DesktopDpiScale
 import com.dexxp.desktop.model.SystemReadinessStatus
 import com.dexxp.desktop.model.WindowSnapMode
 import com.dexxp.desktop.system.SystemFlagsInspector
 import com.dexxp.desktop.terminal.DesktopTerminalLauncher
+import com.dexxp.desktop.windowing.WindowSnappingController
 import com.dexxp.desktop.workspace.VirtualWorkspaceManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -180,5 +185,89 @@ class DesktopDpiAndBoundsTest {
             "ls -la",
             DesktopTerminalLauncher.normalizeNonInteractiveCommand("ls -la")
         )
+    }
+
+    @Test
+    fun `portrait and landscape containers compute ergonomic aspect ratios with titlebar headroom`() {
+        val portrait = WindowSnappingController.computeSnapIntBounds(
+            snapMode = WindowSnapMode.PORTRAIT_CONTAINER,
+            displayWidthPx = 1920,
+            displayHeightPx = 1080,
+            densityDpi = 160
+        )
+        // Portrait Window must remain narrower than tall (~9:19), preserve >= 34px top headroom
+        // for the 28dp floating titlebar, and stay above the 56px taskbar (1024px usable height).
+        assertTrue(portrait.width < portrait.height)
+        assertTrue(portrait.top >= WindowSnappingController.FLOATING_TOP_HEADROOM_DP)
+        assertTrue(portrait.bottom <= 1080 - AppLauncher.TASKBAR_HEIGHT_DP)
+        val portraitAspect = portrait.width.toFloat() / portrait.height.toFloat()
+        assertTrue(portraitAspect in 0.42f..0.56f)
+
+        val landscape = WindowSnappingController.computeSnapIntBounds(
+            snapMode = WindowSnapMode.LANDSCAPE_CONTAINER,
+            displayWidthPx = 1920,
+            displayHeightPx = 1080,
+            densityDpi = 160
+        )
+        assertTrue(landscape.width > landscape.height)
+        assertTrue(landscape.top >= WindowSnappingController.FLOATING_TOP_HEADROOM_DP)
+        assertTrue(landscape.bottom <= 1080 - AppLauncher.TASKBAR_HEIGHT_DP)
+        val landscapeAspect = landscape.width.toFloat() / landscape.height.toFloat()
+        assertTrue(landscapeAspect in 1.50f..1.70f)
+
+        val maximized = WindowSnappingController.computeSnapIntBounds(
+            snapMode = WindowSnapMode.MAXIMIZED,
+            displayWidthPx = 1920,
+            displayHeightPx = 1080,
+            densityDpi = 160
+        )
+        assertEquals(0, maximized.left)
+        assertEquals(0, maximized.top)
+        assertEquals(1920, maximized.right)
+        assertEquals(1024, maximized.bottom)
+        assertFalse(WindowSnapMode.MAXIMIZED.usesFreeformContainer)
+        assertTrue(WindowSnapMode.PORTRAIT_CONTAINER.usesFreeformContainer)
+        assertTrue(WindowSnapMode.LANDSCAPE_CONTAINER.usesFreeformContainer)
+    }
+
+    @Test
+    fun `smart launch policy routes portrait-locked apps to portrait container and responsive apps to widescreen`() {
+        assertEquals(
+            WindowSnapMode.PORTRAIT_CONTAINER,
+            AppLauncher.resolvePolicySnapMode(AppWindowLaunchPolicy.AUTO, isPortraitLocked = true)
+        )
+        assertEquals(
+            WindowSnapMode.MAXIMIZED,
+            AppLauncher.resolvePolicySnapMode(AppWindowLaunchPolicy.AUTO, isPortraitLocked = false)
+        )
+        assertEquals(
+            WindowSnapMode.LANDSCAPE_CONTAINER,
+            AppLauncher.resolvePolicySnapMode(AppWindowLaunchPolicy.LANDSCAPE_WINDOW, isPortraitLocked = true)
+        )
+        assertEquals(
+            WindowSnapMode.PORTRAIT_CONTAINER,
+            AppLauncher.resolvePolicySnapMode(AppWindowLaunchPolicy.PORTRAIT_WINDOW, isPortraitLocked = false)
+        )
+        assertEquals(
+            WindowSnapMode.FREEFORM_CASCADED,
+            AppLauncher.resolvePolicySnapMode(AppWindowLaunchPolicy.FREEFORM_WINDOW, isPortraitLocked = false)
+        )
+        assertEquals(
+            WindowSnapMode.MAXIMIZED,
+            AppLauncher.resolvePolicySnapMode(AppWindowLaunchPolicy.MAXIMIZED_WIDESCREEN, isPortraitLocked = true)
+        )
+    }
+
+    @Test
+    fun `orientation classifier detects portrait-locked activities accurately`() {
+        assertTrue(AppRepository.isPortraitLockedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT))
+        assertTrue(AppRepository.isPortraitLockedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT))
+        assertTrue(AppRepository.isPortraitLockedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT))
+        assertTrue(AppRepository.isPortraitLockedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT))
+
+        assertFalse(AppRepository.isPortraitLockedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED))
+        assertFalse(AppRepository.isPortraitLockedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE))
+        assertFalse(AppRepository.isPortraitLockedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_USER))
+        assertFalse(AppRepository.isPortraitLockedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR))
     }
 }
