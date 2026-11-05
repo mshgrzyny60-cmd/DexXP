@@ -3,6 +3,8 @@ package com.dexxp.desktop.bridge
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.InputDevice
@@ -11,6 +13,9 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.Window
 import android.view.WindowManager
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.dexxp.desktop.launcher.AppLauncher
 import com.dexxp.desktop.model.DesktopEnvironmentMode
 import com.dexxp.desktop.model.ExternalWindowFrame
@@ -63,6 +68,17 @@ class PointerFocusBridge(
 
     @Volatile
     var appLauncherRef: AppLauncher? = null
+
+    @Volatile
+    var ensurePresentationShowingCallback: (() -> Unit)? = null
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    @Volatile
+    private var lastBottomEdgeRevealMs: Long = 0L
+
+    @Volatile
+    private var forceTaskbarRevealUntilMs: Long = 0L
 
     @Volatile
     private var presentationTarget: ShellWindowRegistration? = null
@@ -156,14 +172,16 @@ class PointerFocusBridge(
     fun updateDetectedExternalWindows(
         bounds: List<Rect>,
         frames: List<ExternalWindowFrame>,
-        focusedPackage: String?
+        focusedPackage: String?,
+        authoritative: Boolean = false
     ) {
         externalWindowBounds = bounds
         _detectedExternalFrames.value = frames
         sessionRepository.updateExternalWindowVisibility(
             hasVisibleExternalApp = bounds.isNotEmpty(),
             focusedPackage = focusedPackage,
-            detectedPackages = frames.map { it.packageName }
+            detectedPackages = frames.map { it.packageName },
+            authoritative = authoritative
         )
     }
 
@@ -208,13 +226,14 @@ class PointerFocusBridge(
 
         val isTvMode = sessionRepository.environmentMode.value == DesktopEnvironmentMode.TV_LEANBACK
         val isLaunching = sessionRepository.launchingPackage.value != null
+        val isBottomEdgeForceRevealed = SystemClock.uptimeMillis() < forceTaskbarRevealUntilMs
         val hasActiveApp = sessionRepository.runningWindows.value.any { !it.isMinimized } &&
             !sessionRepository.isShowDesktopActive.value &&
             !isLaunching
 
         val (targetWidth, targetHeight, targetGravity) = when {
-            isTvMode && hasActiveApp -> {
-                // When an app is active on TV (and not mid-launch), hide presentation dialog so the app takes 100% of the screen
+            isTvMode && hasActiveApp && !isBottomEdgeForceRevealed -> {
+                // When an app is active on TV (and not mid-launch or bottom-edge revealed), hide presentation dialog so the app takes 100% of the screen
                 Triple(0, 0, Gravity.TOP or Gravity.START)
             }
             mode == ShellSurfaceMode.DOCKED_TASKBAR -> {
@@ -254,7 +273,7 @@ class PointerFocusBridge(
         // We do NOT steal active keyboard focus because decorView.requestFocus() is ONLY called when
         // a text entry surface (Flyout search, Terminal) explicitly requests it.
         val shouldBeFocusable = when {
-            isTvMode && hasActiveApp -> false
+            isTvMode && hasActiveApp && !isBottomEdgeForceRevealed -> false
             mode == ShellSurfaceMode.DOCKED_TASKBAR -> true
             mode == ShellSurfaceMode.FLYOUT_ACTIVE -> true
             else -> true
@@ -268,7 +287,7 @@ class PointerFocusBridge(
         window.setBackgroundDrawableResource(android.R.color.transparent)
         decorView.setBackgroundColor(Color.TRANSPARENT)
 
-        if (isTvMode && hasActiveApp) {
+        if (isTvMode && hasActiveApp && !isBottomEdgeForceRevealed) {
             decorView.visibility = View.GONE
         } else {
             decorView.visibility = View.VISIBLE
@@ -311,6 +330,64 @@ class PointerFocusBridge(
     }
 
     /**
+     * Forces the DexXP Presentation (Taskbar / Start Menu / Full Desktop) back to the front of
+     * the secondary display's `APPLICATION_LAYER` z-order and re-asserts sticky immersive bars.
+     */
+    fun bringShellToFront(requestFocus: Boolean = false) {
+        val action = Runnable {
+            ensurePresentationShowingCallback?.invoke()
+            val reg = presentationTarget ?: return@Runnable
+            val win = reg.window
+            val decor = win.peekDecorView() ?: return@Runnable
+            val displayInfo = sessionRepository.activeDisplay.value
+            val mode = sessionRepository.shellSurfaceMode.value
+            val needsKeyboard = requestFocus ||
+                sessionRepository.needsShellKeyboardFocus.value ||
+                mode == ShellSurfaceMode.FLYOUT_ACTIVE
+
+            applyPresentationWindowPolicy(
+                window = win,
+                mode = mode,
+                displayWidthPx = displayInfo?.widthPx ?: _pointerState.value.displayWidth,
+                displayHeightPx = displayInfo?.heightPx ?: _pointerState.value.displayHeight,
+                densityDpi = displayInfo?.scaledDensityDpi ?: 160,
+                needsKeyboardFocus = needsKeyboard
+            )
+
+            decor.visibility = View.VISIBLE
+            WindowCompat.setDecorFitsSystemWindows(win, false)
+            WindowInsetsControllerCompat(win, decor).apply {
+                hide(WindowInsetsCompat.Type.systemBars())
+                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+            decor.bringToFront()
+            if (decor.isAttachedToWindow) {
+                runCatching { win.windowManager.updateViewLayout(decor, win.attributes) }
+            }
+            if (requestFocus) {
+                decor.post { decor.requestFocus() }
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            action.run()
+        } else {
+            mainHandler.post(action)
+        }
+    }
+
+    /**
+     * Reveals the docked Taskbar immediately when the mouse cursor reaches the bottom 6 pixels
+     * (`screenY >= displayHeight - 6`) of an active secondary display.
+     */
+    fun onBottomEdgeHoverReveal() {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastBottomEdgeRevealMs < BOTTOM_EDGE_REVEAL_DEBOUNCE_MS) return
+        lastBottomEdgeRevealMs = now
+        forceTaskbarRevealUntilMs = now + 4500L
+        bringShellToFront(requestFocus = false)
+    }
+
+    /**
      * Syncs the shared pointer position with a real hardware / scrcpy mouse event.
      *
      * Events originating from a different display than the active desktop display are ignored,
@@ -333,6 +410,10 @@ class PointerFocusBridge(
         val ny = screenY.coerceIn(0f, maxY)
         lastHardwareX = nx
         lastHardwareY = ny
+
+        if (!isDown && isInBottomEdgeRevealZone(ny, snapshot.displayHeight)) {
+            onBottomEdgeHoverReveal()
+        }
 
         // Fast-path: when a physical/scrcpy mouse is hovering without button transitions,
         // skip StateFlow copy/emission completely to eliminate 120-240Hz main-thread snapshot churn.
@@ -395,6 +476,9 @@ class PointerFocusBridge(
         }
 
         val state = nextState ?: return
+        if (!state.isPrimaryDown && isInBottomEdgeRevealZone(state.y, state.displayHeight)) {
+            onBottomEdgeHoverReveal()
+        }
         if (state.isDragging && activeDragTargetIsTitlebar) {
             val reg = titlebarOverlayTarget
             val bounds = reg?.screenBoundsProvider()
@@ -882,6 +966,15 @@ class PointerFocusBridge(
             registration.window.superDispatchGenericMotionEvent(event)
         } finally {
             event.recycle()
+        }
+    }
+
+    companion object {
+        const val BOTTOM_EDGE_REVEAL_THRESHOLD_PX = 6
+        private const val BOTTOM_EDGE_REVEAL_DEBOUNCE_MS = 250L
+
+        fun isInBottomEdgeRevealZone(screenY: Float, displayHeightPx: Int): Boolean {
+            return displayHeightPx > 0 && screenY >= (displayHeightPx - BOTTOM_EDGE_REVEAL_THRESHOLD_PX)
         }
     }
 }

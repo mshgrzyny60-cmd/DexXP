@@ -11,6 +11,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.dexxp.desktop.DexXpApplication
+import com.dexxp.desktop.browser.DesktopWebActivity
 import com.dexxp.desktop.model.ExternalTextInputState
 import com.dexxp.desktop.model.ExternalWindowFrame
 import kotlinx.coroutines.CoroutineScope
@@ -38,6 +39,16 @@ class DesktopPointerAccessibilityService : AccessibilityService() {
     private var pendingRefreshJob: Job? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var lastObservedWindowFingerprint: Int = 0
+    private var lastDetectedPackageSignature: String = ""
+
+    @Volatile
+    private var refreshAgain: Boolean = false
+
+    @Volatile
+    private var pendingCheckEditor: Boolean = false
+
+    @Volatile
+    private var pendingFollowUpVerify: Boolean = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -55,25 +66,44 @@ class DesktopPointerAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         when (event?.eventType) {
-            AccessibilityEvent.TYPE_WINDOWS_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
+                scheduleThrottledRefresh(checkEditor = false, followUpVerify = false)
+            }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                scheduleThrottledRefresh(checkEditor = false)
+                scheduleThrottledRefresh(checkEditor = false, followUpVerify = true)
             }
             AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
-                scheduleThrottledRefresh(checkEditor = true)
+                scheduleThrottledRefresh(checkEditor = true, followUpVerify = false)
             }
             else -> Unit
         }
     }
 
-    private fun scheduleThrottledRefresh(checkEditor: Boolean) {
-        if (pendingRefreshJob?.isActive == true) return
+    private fun scheduleThrottledRefresh(checkEditor: Boolean, followUpVerify: Boolean) {
+        if (checkEditor) pendingCheckEditor = true
+        if (followUpVerify) pendingFollowUpVerify = true
+        if (pendingRefreshJob?.isActive == true) {
+            refreshAgain = true
+            return
+        }
         pendingRefreshJob = serviceScope.launch {
-            delay(150)
-            refreshExternalDisplayWindows()
-            if (checkEditor) {
-                inspectFocusedExternalEditor()
-            }
+            do {
+                refreshAgain = false
+                delay(75)
+                val shouldCheckEditor = pendingCheckEditor
+                val shouldFollowUp = pendingFollowUpVerify
+                pendingCheckEditor = false
+                pendingFollowUpVerify = false
+
+                refreshExternalDisplayWindows()
+                if (shouldCheckEditor) {
+                    inspectFocusedExternalEditor()
+                }
+                if (shouldFollowUp && !refreshAgain) {
+                    delay(240)
+                    refreshExternalDisplayWindows()
+                }
+            } while (refreshAgain)
         }
     }
 
@@ -86,7 +116,7 @@ class DesktopPointerAccessibilityService : AccessibilityService() {
             instance = null
         }
         val app = applicationContext as? DexXpApplication
-        app?.pointerFocusBridge?.updateDetectedExternalWindows(emptyList(), emptyList(), null)
+        app?.pointerFocusBridge?.updateDetectedExternalWindows(emptyList(), emptyList(), null, authoritative = false)
         app?.sessionRepository?.updateExternalTextInputState(ExternalTextInputState())
         app?.sessionRepository?.refreshSystemReadiness()
         super.onDestroy()
@@ -96,7 +126,9 @@ class DesktopPointerAccessibilityService : AccessibilityService() {
         val app = applicationContext as? DexXpApplication ?: return
         val activeDisplay = app.sessionRepository.activeDisplay.value
         if (activeDisplay == null) {
-            app.pointerFocusBridge.updateDetectedExternalWindows(emptyList(), emptyList(), null)
+            lastDetectedPackageSignature = ""
+            lastObservedWindowFingerprint = 0
+            app.pointerFocusBridge.updateDetectedExternalWindows(emptyList(), emptyList(), null, authoritative = false)
             return
         }
         val targetDisplayId = activeDisplay.displayId
@@ -117,7 +149,9 @@ class DesktopPointerAccessibilityService : AccessibilityService() {
             if (rootPkg == "com.android.systemui") continue
             if (rootPkg == selfPkg) {
                 val hasRunningWebApp = app.sessionRepository.runningWindows.value.any {
-                    it.packageName.startsWith("dexxp.webapp") && !it.isMinimized
+                    it.packageName.startsWith("dexxp.webapp.") &&
+                        !it.isMinimized &&
+                        DesktopWebActivity.isRecordAlive(it.packageName)
                 }
                 if (!hasRunningWebApp) continue
             }
@@ -142,16 +176,25 @@ class DesktopPointerAccessibilityService : AccessibilityService() {
             }
         }
 
-        val fingerprint = (focusedExternalPkg?.hashCode() ?: 0) * 31 + frames.sumOf { it.bounds.hashCode() } + frames.size
-        if (fingerprint == lastObservedWindowFingerprint && frames.isNotEmpty()) {
+        val packageSignature = frames.joinToString("|") { "${it.packageName}:${it.isFocused}" }
+        val fingerprint = frames.fold(focusedExternalPkg?.hashCode() ?: 0) { acc, f ->
+            acc * 31 + f.packageName.hashCode() * 31 + f.bounds.hashCode()
+        } + frames.size
+
+        if (fingerprint == lastObservedWindowFingerprint &&
+            packageSignature == lastDetectedPackageSignature &&
+            frames.isNotEmpty()
+        ) {
             return
         }
         lastObservedWindowFingerprint = fingerprint
+        lastDetectedPackageSignature = packageSignature
 
         app.pointerFocusBridge.updateDetectedExternalWindows(
             bounds = detectedRects,
             frames = frames,
-            focusedPackage = focusedExternalPkg
+            focusedPackage = focusedExternalPkg,
+            authoritative = true
         )
     }
 

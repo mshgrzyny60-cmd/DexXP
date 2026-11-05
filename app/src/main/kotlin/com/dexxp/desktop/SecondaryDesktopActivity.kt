@@ -27,6 +27,7 @@ class SecondaryDesktopActivity : ComponentActivity() {
 
     private var hostedDisplayId: Int = Display.INVALID_DISPLAY
     private var displayManager: DisplayManager? = null
+    private var wasStoppedBehindExternalApp: Boolean = false
 
     private val cableDisconnectListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = Unit
@@ -62,11 +63,7 @@ class SecondaryDesktopActivity : ComponentActivity() {
 
         DisplayRouterService.start(this)
 
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        WindowInsetsControllerCompat(window, window.decorView).apply {
-            hide(WindowInsetsCompat.Type.systemBars())
-            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        }
+        applyStickyImmersiveSystemBars()
 
         val app = application as DexXpApplication
         setContent {
@@ -103,8 +100,14 @@ class SecondaryDesktopActivity : ComponentActivity() {
         return super.dispatchKeyEvent(event)
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        applyStickyImmersiveSystemBars()
+    }
+
     override fun onStart() {
         super.onStart()
+        applyStickyImmersiveSystemBars()
         val app = application as DexXpApplication
         app.pointerFocusBridge.registerBackdropWindow(window) {
             val decor = window.peekDecorView()
@@ -112,10 +115,34 @@ class SecondaryDesktopActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        applyStickyImmersiveSystemBars()
+        val app = application as DexXpApplication
+        if (wasStoppedBehindExternalApp) {
+            wasStoppedBehindExternalApp = false
+            app.sessionRepository.onSecondaryHomeResumedAfterExternalClose()
+        }
+        app.pointerFocusBridge.bringShellToFront(requestFocus = false)
+    }
+
     override fun onStop() {
         val app = application as DexXpApplication
+        if (!app.sessionRepository.isShowDesktopActive.value &&
+            app.sessionRepository.runningWindows.value.any { !it.isMinimized }
+        ) {
+            wasStoppedBehindExternalApp = true
+        }
         app.pointerFocusBridge.unregisterBackdropWindow(window)
         super.onStop()
+    }
+
+    private fun applyStickyImmersiveSystemBars() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
     }
 
     override fun onDestroy() {

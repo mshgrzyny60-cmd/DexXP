@@ -1,5 +1,6 @@
 package com.dexxp.desktop.service
 
+import android.app.ActivityManager
 import android.app.ActivityOptions
 import android.app.Notification
 import android.app.NotificationChannel
@@ -28,6 +29,7 @@ import com.dexxp.desktop.MainActivity
 import com.dexxp.desktop.R
 import com.dexxp.desktop.SecondaryDesktopActivity
 import com.dexxp.desktop.bridge.CursorOverlayController
+import com.dexxp.desktop.bridge.DesktopPointerAccessibilityService
 import com.dexxp.desktop.browser.DesktopWebActivity
 import com.dexxp.desktop.model.DesktopDpiScale
 import com.dexxp.desktop.model.DesktopEnvironmentMode
@@ -40,9 +42,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -69,6 +73,9 @@ class DisplayRouterService : Service() {
     private var activeScaledDisplayContext: Context? = null
     private var attachedDisplayId: Int = Display.INVALID_DISPLAY
 
+    @Volatile
+    private var isInternalTeardown: Boolean = false
+
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) {
             if (displayId == Display.DEFAULT_DISPLAY) return
@@ -90,9 +97,10 @@ class DisplayRouterService : Service() {
                 if (display.state == Display.STATE_OFF) return
                 val currentInfo = dexApp.sessionRepository.activeDisplay.value
                 val metrics = readRealDisplayMetrics(display)
-                if (currentInfo != null &&
-                    (currentInfo.widthPx != metrics.widthPixels ||
-                        currentInfo.heightPx != metrics.heightPixels)
+                if (currentInfo == null ||
+                    activePresentation?.isShowing != true ||
+                    currentInfo.widthPx != metrics.widthPixels ||
+                    currentInfo.heightPx != metrics.heightPixels
                 ) {
                     bindPresentationToDisplay(display)
                 }
@@ -137,7 +145,31 @@ class DisplayRouterService : Service() {
         promoteToForeground(statusText = "Waiting for HDMI / USB-C DP or Wireless display")
 
         displayManager.registerDisplayListener(displayListener, mainHandler)
+        dexApp.pointerFocusBridge.ensurePresentationShowingCallback = {
+            if (attachedDisplayId != Display.INVALID_DISPLAY && activePresentation?.isShowing != true) {
+                displayManager.getDisplay(attachedDisplayId)?.takeIf { it.isValid }?.let { display ->
+                    bindPresentationToDisplay(display)
+                }
+            }
+        }
         evaluateAndBindExternalDisplays()
+
+        serviceScope.launch {
+            dexApp.sessionRepository.desktopRecoveryEvents.collect {
+                if (attachedDisplayId != Display.INVALID_DISPLAY) {
+                    dexApp.appLauncher.sendSecondaryHomeToFront(this@DisplayRouterService)
+                    dexApp.pointerFocusBridge.bringShellToFront(requestFocus = false)
+                }
+            }
+        }
+
+        // 1-second liveness watchdog: reconciles externally killed apps & auto-dismissed Presentations
+        serviceScope.launch {
+            while (isActive) {
+                delay(1000)
+                runExternalAppWatchdogTick()
+            }
+        }
 
         serviceScope.launch {
             dexApp.sessionRepository.dpiScale
@@ -199,10 +231,50 @@ class DisplayRouterService : Service() {
 
     override fun onDestroy() {
         mainHandler.removeCallbacksAndMessages(null)
+        dexApp.pointerFocusBridge.ensurePresentationShowingCallback = null
         runCatching { displayManager.unregisterDisplayListener(displayListener) }
         teardownActivePresentation()
         serviceScope.cancel()
         super.onDestroy()
+    }
+
+    private fun runExternalAppWatchdogTick() {
+        val displayId = attachedDisplayId
+        if (displayId == Display.INVALID_DISPLAY) return
+
+        val display = displayManager.getDisplay(displayId)
+        if (display == null || !display.isValid) {
+            teardownActivePresentation()
+            evaluateAndBindExternalDisplays()
+            return
+        }
+
+        // 1. Recover immediately if Android auto-dismissed Presentation during an app orientation switch
+        if (activePresentation?.isShowing != true && display.state != Display.STATE_OFF) {
+            bindPresentationToDisplay(display)
+        }
+
+        // 2. Poll Accessibility window tree on the external display to catch dismissed/swiped apps
+        DesktopPointerAccessibilityService.instance?.refreshExternalDisplayWindows()
+
+        // 3. Reconcile DesktopWebActivity instances & (when exposed by OS) running process list
+        val am = getSystemService(ActivityManager::class.java)
+        val runningProcs = runCatching { am?.runningAppProcesses }.getOrNull().orEmpty()
+        val exposedExternalPackages: Set<String>? = if (
+            runningProcs.any { proc -> proc.pkgList?.any { it != packageName } == true }
+        ) {
+            buildSet {
+                for (proc in runningProcs) {
+                    proc.pkgList?.forEach { add(it) }
+                    if (proc.processName.isNotBlank()) {
+                        add(proc.processName.substringBefore(':'))
+                    }
+                }
+            }
+        } else {
+            null
+        }
+        dexApp.sessionRepository.reconcileDeadProcesses(exposedExternalPackages)
     }
 
     fun evaluateAndBindExternalDisplays() {
@@ -222,10 +294,9 @@ class DisplayRouterService : Service() {
 
     private fun findBestExternalDisplay(): Display? {
         val scrcpyDisplay = displayManager.displays.firstOrNull { d ->
-            if (d.displayId == Display.DEFAULT_DISPLAY || !d.isValid) return@firstOrNull false
-            if (d.name?.contains("scrcpy", ignoreCase = true) != true) return@firstOrNull false
-            val m = readRealDisplayMetrics(d)
-            m.widthPixels >= m.heightPixels
+            d.displayId != Display.DEFAULT_DISPLAY &&
+                d.isValid &&
+                d.name?.contains("scrcpy", ignoreCase = true) == true
         }
         if (scrcpyDisplay != null) {
             return scrcpyDisplay
@@ -339,7 +410,23 @@ class DisplayRouterService : Service() {
             hasHardwareCursorOverlay = { cursorOverlayController.isAttached }
         )
 
+        presentation.setOnDismissListener {
+            if (!isInternalTeardown && attachedDisplayId == display.displayId) {
+                mainHandler.post {
+                    val live = displayManager.getDisplay(display.displayId)
+                    if (!isInternalTeardown && live != null && live.isValid && live.state != Display.STATE_OFF) {
+                        Log.i(TAG, "Re-binding auto-dismissed Presentation on display ${display.displayId}")
+                        bindPresentationToDisplay(live)
+                    }
+                }
+            }
+        }
+
         runCatching {
+            val isFreshDesktopRoot = dexApp.sessionRepository.runningWindows.value.none { !it.isMinimized }
+            if (isFreshDesktopRoot) {
+                dexApp.appLauncher.sendSecondaryHomeToFront(this)
+            }
             presentation.show()
             activePresentation = presentation
             activeScaledDisplayContext = scaledDisplayContext
@@ -350,6 +437,7 @@ class DisplayRouterService : Service() {
             if (info.transportType != DisplayTransportType.SCRCPY_VIRTUAL_DISPLAY) {
                 cursorOverlayController.attachToDisplay(display)
             }
+            dexApp.pointerFocusBridge.bringShellToFront(requestFocus = false)
             promoteToForeground(
                 statusText = "${info.name} • ${info.resolutionSummary} (${targetDpi}dpi)"
             )
@@ -363,16 +451,21 @@ class DisplayRouterService : Service() {
         cursorOverlayController.detach()
         titlebarOverlayController.detach()
         activePresentation?.let { pres ->
-            runCatching { pres.dismiss() }
+            isInternalTeardown = true
+            try {
+                runCatching { pres.dismiss() }
+            } finally {
+                isInternalTeardown = false
+            }
         }
         activePresentation = null
         activeScaledDisplayContext = null
-        attachedDisplayId = Display.INVALID_DISPLAY
-        dexApp.keyboardManager.dismissAltTab()
-        dexApp.sessionRepository.dismissFlyouts()
-        dexApp.pointerFocusBridge.onExternalDisplayDisconnected()
-        dexApp.sessionRepository.updateActiveDisplay(null)
         if (!keepPowerSession) {
+            attachedDisplayId = Display.INVALID_DISPLAY
+            dexApp.keyboardManager.dismissAltTab()
+            dexApp.sessionRepository.dismissFlyouts()
+            dexApp.pointerFocusBridge.onExternalDisplayDisconnected()
+            dexApp.sessionRepository.updateActiveDisplay(null)
             DesktopWebActivity.finishAllSecondaryInstances()
             dexApp.phoneScreenPowerController.onExternalDisplayStateChanged(attached = false)
         }

@@ -169,9 +169,15 @@ class DesktopWindowPresentation(
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        window?.let { applyStickyImmersiveSystemBars(it) }
         if (hasFocus) {
             clipboardManager.syncCurrentPrimaryClip()
         }
+    }
+
+    fun bringShellToFront(requestFocus: Boolean = false) {
+        window?.let { applyStickyImmersiveSystemBars(it) }
+        pointerFocusBridge.bringShellToFront(requestFocus)
     }
 
     override fun onStart() {
@@ -180,6 +186,7 @@ class DesktopWindowPresentation(
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
 
         val win = window ?: return
+        applyStickyImmersiveSystemBars(win)
         pointerFocusBridge.registerPresentationWindow(win) {
             computeCurrentScreenBounds()
         }
@@ -310,10 +317,14 @@ class DesktopWindowPresentation(
         }
         win.attributes = attrs
 
+        applyStickyImmersiveSystemBars(win)
+    }
+
+    private fun applyStickyImmersiveSystemBars(win: Window) {
         WindowCompat.setDecorFitsSystemWindows(win, false)
         WindowInsetsControllerCompat(win, win.decorView).apply {
             hide(WindowInsetsCompat.Type.systemBars())
-            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
     }
 

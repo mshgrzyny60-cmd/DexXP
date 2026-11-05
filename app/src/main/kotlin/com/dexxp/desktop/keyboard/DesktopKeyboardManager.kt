@@ -57,14 +57,15 @@ import kotlinx.coroutines.flow.update
  * Hardware Keyboard Shortcut Interceptor, `Alt + Tab` M3 Window Switcher, and Soft IME Relay.
  *
  * Intercepts global & shell key events:
+ * - `Alt + F4` / `Ctrl + W`: Force-closes the currently focused window (or active terminal/flyout) and kills its background process.
+ * - `Super / Meta / Windows` solo press / `Ctrl + Escape`: Toggles Start Menu and forces the Taskbar/Shell to the front.
+ * - `Super + D` (`Win + D`) / `F11`: Toggles Show Desktop (minimizes/restores all active windows and brings DexXP desktop to front).
  * - `Alt + Space` / `Super + Space`: Toggles Universal Command Palette & Spotlight (`CommandPaletteController`).
  * - `Super + Tab`: Toggles Mission Control / Exposé Window Overview (`MissionControlOverviewController`).
  * - `Ctrl + Alt + T` / `Super + T`: Toggles Integrated Local Developer Terminal (`DesktopTerminalLauncher`).
  * - `Alt + Tab` / `Alt + Shift + Tab`: Opens & cycles M3 Task Switcher, committing on `Alt` release.
- * - `Super / Meta / Windows` solo press: Toggles Start Menu open/closed.
  * - `Super + V` (`Win + V`): Toggles Clipboard History Flyout (`DesktopClipboardManager`).
  * - `Super + Ctrl + Left / Right Arrow`: Switches previous/next Virtual Workspace (`VirtualWorkspaceManager`).
- * - `Super + D`: Minimizes/restores all active Freeform windows.
  * - `Super + Left / Right / Up / Down`: Instant window snap (Left 50%, Right 50%, Maximize, Freeform).
  * - `Escape`: Dismisses active Task Switcher or shell flyouts.
  */
@@ -104,7 +105,9 @@ class DesktopKeyboardManager(
                 metaChordConsumed = false
             } else if (action == KeyEvent.ACTION_UP) {
                 if (metaPressedSoloCandidate && !metaChordConsumed) {
+                    dismissAltTab()
                     sessionRepository.toggleStartMenu()
+                    pointerFocusBridge.bringShellToFront(requestFocus = sessionRepository.isStartMenuOpen.value)
                     metaPressedSoloCandidate = false
                     return true
                 }
@@ -114,8 +117,45 @@ class DesktopKeyboardManager(
             return false
         }
 
-        // 1a. Global Command Palette (`Alt + Space` / `Super + Space`) & Terminal (`Ctrl + Alt + T`)
+        // 1a. Global Escape Hatches (`Alt+F4`, `Ctrl+W`, `Ctrl+Escape`, `F11`), Command Palette & Terminal
         if (action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            // Alt + F4 or Ctrl + W -> Force-close focused window (escape hatch for trapped fullscreen apps)
+            if ((keyCode == KeyEvent.KEYCODE_F4 && event.isAltPressed) ||
+                (keyCode == KeyEvent.KEYCODE_W && event.isCtrlPressed && !event.isAltPressed && !event.isMetaPressed)
+            ) {
+                dismissAltTab()
+                val topWindow = sessionRepository.focusedOrMostRecentWindow()
+                if (topWindow != null && !sessionRepository.isShowDesktopActive.value) {
+                    appLauncher.closeWindow(topWindow.packageName)
+                    pointerFocusBridge.bringShellToFront(requestFocus = false)
+                    return true
+                }
+                if (sessionRepository.isTerminalWindowOpen.value) {
+                    sessionRepository.setTerminalWindowOpen(false)
+                    return true
+                }
+                if (sessionRepository.anyFlyoutOpen.value) {
+                    sessionRepository.dismissFlyouts()
+                    return true
+                }
+            }
+
+            // Ctrl + Escape -> Toggle Start Menu & force Taskbar/Presentation to front
+            if (keyCode == KeyEvent.KEYCODE_ESCAPE && event.isCtrlPressed) {
+                dismissAltTab()
+                sessionRepository.toggleStartMenu()
+                pointerFocusBridge.bringShellToFront(requestFocus = sessionRepository.isStartMenuOpen.value)
+                return true
+            }
+
+            // F11 -> Toggle Show Desktop (minimize all apps & pull DexXP Desktop to front)
+            if (keyCode == KeyEvent.KEYCODE_F11 && !event.isAltPressed && !event.isCtrlPressed) {
+                dismissAltTab()
+                appLauncher.toggleMinimizeAllOrRestore()
+                pointerFocusBridge.bringShellToFront(requestFocus = sessionRepository.isShowDesktopActive.value)
+                return true
+            }
+
             if (keyCode == KeyEvent.KEYCODE_SPACE && (event.isAltPressed || event.isMetaPressed)) {
                 if (event.isMetaPressed) {
                     metaPressedSoloCandidate = false
@@ -123,11 +163,13 @@ class DesktopKeyboardManager(
                 }
                 dismissAltTab()
                 commandPaletteController.togglePalette()
+                pointerFocusBridge.bringShellToFront(requestFocus = sessionRepository.isCommandPaletteOpen.value)
                 return true
             }
             if (keyCode == KeyEvent.KEYCODE_T && event.isCtrlPressed && event.isAltPressed) {
                 dismissAltTab()
                 terminalLauncher.toggleTerminal()
+                pointerFocusBridge.bringShellToFront(requestFocus = sessionRepository.isTerminalWindowOpen.value)
                 return true
             }
         }
@@ -188,23 +230,28 @@ class DesktopKeyboardManager(
                     metaChordConsumed = true
                     dismissAltTab()
                     missionControlController.toggleOverview()
+                    pointerFocusBridge.bringShellToFront(requestFocus = sessionRepository.isMissionControlOpen.value)
                     return true
                 }
                 KeyEvent.KEYCODE_T -> {
                     metaChordConsumed = true
                     dismissAltTab()
                     terminalLauncher.toggleTerminal()
+                    pointerFocusBridge.bringShellToFront(requestFocus = sessionRepository.isTerminalWindowOpen.value)
                     return true
                 }
                 KeyEvent.KEYCODE_V -> {
                     metaChordConsumed = true
                     clipboardManager.syncCurrentPrimaryClip()
                     sessionRepository.toggleClipboardHistory()
+                    pointerFocusBridge.bringShellToFront(requestFocus = sessionRepository.isClipboardHistoryOpen.value)
                     return true
                 }
                 KeyEvent.KEYCODE_D -> {
                     metaChordConsumed = true
+                    dismissAltTab()
                     appLauncher.toggleMinimizeAllOrRestore()
+                    pointerFocusBridge.bringShellToFront(requestFocus = sessionRepository.isShowDesktopActive.value)
                     return true
                 }
                 KeyEvent.KEYCODE_DPAD_LEFT -> {
@@ -230,6 +277,7 @@ class DesktopKeyboardManager(
         if (keyCode == KeyEvent.KEYCODE_TAB && event.isAltPressed) {
             if (action == KeyEvent.ACTION_DOWN) {
                 cycleAltTab(reverse = event.isShiftPressed)
+                pointerFocusBridge.bringShellToFront(requestFocus = false)
             }
             return true
         }

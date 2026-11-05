@@ -8,6 +8,7 @@ import android.provider.Settings
 import android.util.Log
 import android.view.Display
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import androidx.compose.foundation.Image
@@ -158,6 +159,7 @@ class WindowTitlebarOverlayController(
     private var windowManager: WindowManager? = null
     private var composeView: ComposeView? = null
     private var layoutParams: WindowManager.LayoutParams? = null
+    private var bottomEdgeHoverView: View? = null
     private var hostLifecycle: OverlayHostLifecycle? = null
     private var scope: CoroutineScope? = null
 
@@ -324,6 +326,54 @@ class WindowTitlebarOverlayController(
         hostLifecycle = owner
         isAttached = true
 
+        // 6px transparent bottom-edge hover sensor strip: ensures moving the mouse to the bottom edge
+        // reveals the Taskbar even when an unadapted fullscreen app or TV Leanback mode covers the screen.
+        val edgeSensor = object : View(uiCtx) {
+            override fun onHoverEvent(event: MotionEvent): Boolean {
+                if (event.actionMasked == MotionEvent.ACTION_HOVER_ENTER ||
+                    event.actionMasked == MotionEvent.ACTION_HOVER_MOVE
+                ) {
+                    val h = sessionRepository.activeDisplay.value?.heightPx ?: 1080
+                    pointerFocusBridge.setPointerPosition(
+                        screenX = event.rawX,
+                        screenY = (h - 1).coerceAtLeast(1).toFloat(),
+                        isDown = false,
+                        sourceDisplayId = display.displayId
+                    )
+                    pointerFocusBridge.onBottomEdgeHoverReveal()
+                }
+                return super.onHoverEvent(event)
+            }
+
+            override fun onTouchEvent(event: MotionEvent): Boolean {
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    pointerFocusBridge.onBottomEdgeHoverReveal()
+                }
+                return false
+            }
+        }.apply {
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            visibility = View.GONE
+        }
+        val edgeLp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            PointerFocusBridge.BOTTOM_EDGE_REVEAL_THRESHOLD_PX,
+            0,
+            0,
+            resolvedWindowType,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.START
+            title = "DexXPBottomEdgeHoverSensor"
+        }
+        if (runCatching { wm.addView(edgeSensor, edgeLp); true }.getOrDefault(false)) {
+            bottomEdgeHoverView = edgeSensor
+        }
+
         pointerFocusBridge.registerTitlebarOverlayView(view) { currentVisibleBounds }
 
         val overlayScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -336,6 +386,16 @@ class WindowTitlebarOverlayController(
                 sessionRepository.anyFlyoutOpen,
                 sessionRepository.activeDisplay
             ) { liveFrames, records, showDesktop, flyoutOpen, displayInfo ->
+                val shouldEnableBottomSensor = !showDesktop &&
+                    !flyoutOpen &&
+                    displayInfo != null &&
+                    records.any { !it.isMinimized }
+                bottomEdgeHoverView?.let { sensor ->
+                    val desiredVis = if (shouldEnableBottomSensor) View.VISIBLE else View.GONE
+                    if (sensor.visibility != desiredVis) {
+                        sensor.visibility = desiredVis
+                    }
+                }
                 resolveActiveTitlebarModel(
                     liveFrames = liveFrames,
                     records = records,
@@ -630,8 +690,13 @@ class WindowTitlebarOverlayController(
         currentVisibleBounds = null
         renderModelFlow.value = null
 
+        val edgeView = bottomEdgeHoverView
         val view = composeView
         val wm = windowManager
+        if (edgeView != null && wm != null) {
+            runCatching { wm.removeViewImmediate(edgeView) }
+        }
+        bottomEdgeHoverView = null
         if (view != null) {
             pointerFocusBridge.unregisterTitlebarOverlayView(view)
             if (wm != null) {

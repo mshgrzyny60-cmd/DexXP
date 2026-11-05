@@ -249,6 +249,24 @@ class DesktopWebActivity : ComponentActivity() {
         injectWindowsDesktopPlatformSpoof(wv)
     }
 
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val app = application as? DexXpApplication
+        if (app != null && app.keyboardManager.onHardwareKeyEvent(event)) {
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            WindowInsetsControllerCompat(window, window.decorView).apply {
+                hide(WindowInsetsCompat.Type.systemBars())
+                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        }
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             if (customVideoView != null) {
@@ -385,6 +403,11 @@ class DesktopWebActivity : ComponentActivity() {
         """
 
         private val activeInstances = ConcurrentHashMap<String, WeakReference<DesktopWebActivity>>()
+
+        fun isRecordAlive(recordKey: String): Boolean {
+            val activity = activeInstances[recordKey]?.get() ?: return false
+            return !activity.isFinishing && !activity.isDestroyed
+        }
 
         fun injectWindowsDesktopPlatformSpoof(webView: WebView?) {
             webView?.evaluateJavascript(PLATFORM_SPOOF_JS, null)

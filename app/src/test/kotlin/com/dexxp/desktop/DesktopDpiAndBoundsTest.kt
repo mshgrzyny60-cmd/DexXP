@@ -1,6 +1,7 @@
 package com.dexxp.desktop
 
 import android.content.pm.ActivityInfo
+import com.dexxp.desktop.bridge.PointerFocusBridge
 import com.dexxp.desktop.browser.DesktopWebActivity
 import com.dexxp.desktop.clipboard.DesktopClipboardManager
 import com.dexxp.desktop.command.CommandPaletteController
@@ -12,6 +13,7 @@ import com.dexxp.desktop.model.ClipboardItemKind
 import com.dexxp.desktop.model.DesktopDpiScale
 import com.dexxp.desktop.model.SystemReadinessStatus
 import com.dexxp.desktop.model.WindowSnapMode
+import com.dexxp.desktop.state.DesktopSessionRepository
 import com.dexxp.desktop.system.SystemFlagsInspector
 import com.dexxp.desktop.terminal.DesktopTerminalLauncher
 import com.dexxp.desktop.windowing.WindowSnappingController
@@ -296,5 +298,23 @@ class DesktopDpiAndBoundsTest {
         assertEquals("dexxp.webapp.youtube_desktop", DesktopWebActivity.inferRecordKey("https://www.youtube.com/watch?v=1"))
         assertEquals(28, WindowTitlebarOverlayController.TITLEBAR_HEIGHT_DP)
         assertEquals(336, WindowTitlebarOverlayController.MAXIMIZED_PILL_WIDTH_DP)
+    }
+
+    @Test
+    fun `bottom edge hover reveal triggers strictly within bottom 6 pixels`() {
+        assertEquals(6, PointerFocusBridge.BOTTOM_EDGE_REVEAL_THRESHOLD_PX)
+        assertFalse(PointerFocusBridge.isInBottomEdgeRevealZone(screenY = 1073f, displayHeightPx = 1080))
+        assertTrue(PointerFocusBridge.isInBottomEdgeRevealZone(screenY = 1074f, displayHeightPx = 1080))
+        assertTrue(PointerFocusBridge.isInBottomEdgeRevealZone(screenY = 1079f, displayHeightPx = 1080))
+        assertFalse(PointerFocusBridge.isInBottomEdgeRevealZone(screenY = 0f, displayHeightPx = 0))
+    }
+
+    @Test
+    fun `launch grace period protects cold app startup and expires cleanly for watchdog reconciliation`() {
+        val t0 = 1_000_000L
+        assertTrue(DesktopSessionRepository.isTimestampWithinGracePeriod(t0, nowEpochMs = t0))
+        assertTrue(DesktopSessionRepository.isTimestampWithinGracePeriod(t0, nowEpochMs = t0 + 2499L))
+        assertFalse(DesktopSessionRepository.isTimestampWithinGracePeriod(t0, nowEpochMs = t0 + 2500L))
+        assertFalse(DesktopSessionRepository.isTimestampWithinGracePeriod(0L, nowEpochMs = t0))
     }
 }

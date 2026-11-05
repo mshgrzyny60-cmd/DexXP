@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import android.view.Display
+import com.dexxp.desktop.SecondaryDesktopActivity
 import com.dexxp.desktop.StandaloneDesktopActivity
 import com.dexxp.desktop.bridge.DesktopPointerAccessibilityService
 import com.dexxp.desktop.browser.DesktopWebActivity
@@ -673,6 +674,27 @@ class AppLauncher(
         if (displayId != Display.DEFAULT_DISPLAY) {
             sessionRepository.setShowDesktop(true)
             sessionRepository.dismissFlyouts()
+            val homeIntent = Intent(appContext, SecondaryDesktopActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                        Intent.FLAG_ACTIVITY_NO_ANIMATION
+                )
+            }
+            val options = buildLaunchActivityOptions(
+                targetDisplayId = displayId,
+                isTvMode = false,
+                launchBounds = null,
+                useFreeformWindowing = false
+            )
+            dispatchActivityIntent(
+                context = launchContext ?: appContext,
+                intent = homeIntent,
+                optionsBundle = options,
+                targetDisplayId = displayId,
+                targetPackage = appContext.packageName
+            )
         } else {
             val standaloneIntent = Intent(appContext, StandaloneDesktopActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
