@@ -11,8 +11,8 @@ android {
         applicationId = "com.dexxp.desktop"
         minSdk = 31
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 3
+        versionName = "1.2.0-beta"
     }
 
     buildTypes {
@@ -89,3 +89,4 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
 }
+
