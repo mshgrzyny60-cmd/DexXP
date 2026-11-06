@@ -12,6 +12,8 @@ import androidx.activity.compose.setContent
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import com.dexxp.desktop.bridge.DesktopPointerAccessibilityService
 import com.dexxp.desktop.service.DisplayRouterService
 import com.dexxp.desktop.ui.desktop.DesktopWorkspaceRoot
 import com.dexxp.desktop.ui.theme.DexXPTheme
@@ -28,6 +30,14 @@ class SecondaryDesktopActivity : ComponentActivity() {
     private var hostedDisplayId: Int = Display.INVALID_DISPLAY
     private var displayManager: DisplayManager? = null
     private var wasStoppedBehindExternalApp: Boolean = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val confirmExternalCloseRunnable = Runnable {
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+            DesktopPointerAccessibilityService.instance == null
+        ) {
+            (application as DexXpApplication).sessionRepository.onSecondaryHomeResumedAfterExternalClose()
+        }
+    }
 
     private val cableDisconnectListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = Unit
@@ -121,12 +131,23 @@ class SecondaryDesktopActivity : ComponentActivity() {
         val app = application as DexXpApplication
         if (wasStoppedBehindExternalApp) {
             wasStoppedBehindExternalApp = false
-            app.sessionRepository.onSecondaryHomeResumedAfterExternalClose()
+            // When Accessibility is disabled, perform two consecutive RESUMED checks separated by 250ms
+            if (DesktopPointerAccessibilityService.instance == null) {
+                app.sessionRepository.onSecondaryHomeResumedAfterExternalClose()
+                mainHandler.removeCallbacks(confirmExternalCloseRunnable)
+                mainHandler.postDelayed(confirmExternalCloseRunnable, 250L)
+            }
         }
         app.pointerFocusBridge.bringShellToFront(requestFocus = false)
     }
 
+    override fun onPause() {
+        mainHandler.removeCallbacks(confirmExternalCloseRunnable)
+        super.onPause()
+    }
+
     override fun onStop() {
+        mainHandler.removeCallbacks(confirmExternalCloseRunnable)
         val app = application as DexXpApplication
         if (!app.sessionRepository.isShowDesktopActive.value &&
             app.sessionRepository.runningWindows.value.any { !it.isMinimized }
@@ -146,6 +167,7 @@ class SecondaryDesktopActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(confirmExternalCloseRunnable)
         displayManager?.unregisterDisplayListener(cableDisconnectListener)
         displayManager = null
         super.onDestroy()

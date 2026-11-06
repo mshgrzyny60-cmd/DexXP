@@ -186,8 +186,7 @@ class DesktopSessionRepository(context: Context) {
     private val _launchingPackage = MutableStateFlow<String?>(null)
     val launchingPackage: StateFlow<String?> = _launchingPackage.asStateFlow()
 
-    private val launchTimestamps = ConcurrentHashMap<String, Long>()
-    private val confirmedVisiblePackages = ConcurrentHashMap.newKeySet<String>()
+    private val livenessTracker = WindowLivenessTracker()
 
     private val _desktopRecoveryEvents = MutableSharedFlow<Unit>(
         extraBufferCapacity = 8,
@@ -197,14 +196,43 @@ class DesktopSessionRepository(context: Context) {
 
     fun setLaunchingPackage(packageName: String?) {
         _launchingPackage.value = packageName
+        if (packageName == null) {
+            ensureShellRecovered()
+        }
     }
 
-    fun requestDesktopRecovery() {
-        _externalAppVisibleOnDisplay.value = false
-        _launchingPackage.value = null
-        _isShowDesktopActive.value = true
-        dismissFlyouts()
-        _desktopRecoveryEvents.tryEmit(Unit)
+    fun hasPendingVisibilityMisses(): Boolean = livenessTracker.hasPendingMisses()
+
+    /**
+     * Central single source of truth guaranteeing the Desktop & Taskbar shell can never remain
+     * hidden when zero visible windows exist on the display.
+     *
+     * @param forceShowDesktop `true` for explicit Show Desktop / Minimize All / Clear All actions;
+     *   `false` for automatic close/minimize/death reconciliation checks.
+     * @return `true` when the shell is in (or recovered to) full desktop visibility.
+     */
+    fun ensureShellRecovered(forceShowDesktop: Boolean = false): Boolean {
+        if (forceShowDesktop) {
+            _launchingPackage.value = null
+        }
+        val hasVisibleWindows = _runningWindows.value.any { !it.isMinimized }
+        val isLaunching = _launchingPackage.value != null
+        val transition = computeEnsureShellRecoveredTransition(
+            wasShowDesktopActive = _isShowDesktopActive.value,
+            wasExternalAppVisible = _externalAppVisibleOnDisplay.value,
+            hasVisibleWindows = hasVisibleWindows,
+            isLaunching = isLaunching,
+            forceShowDesktop = forceShowDesktop
+        )
+        _externalAppVisibleOnDisplay.value = transition.externalAppVisible
+        _isShowDesktopActive.value = transition.showDesktop
+        if (transition.shouldDismissFlyouts) {
+            dismissFlyouts()
+        }
+        if (transition.shouldEmitRecoveryEvent) {
+            _desktopRecoveryEvents.tryEmit(Unit)
+        }
+        return transition.showDesktop
     }
 
     fun isWithinLaunchGracePeriod(
@@ -213,13 +241,12 @@ class DesktopSessionRepository(context: Context) {
         nowMs: Long = System.currentTimeMillis()
     ): Boolean {
         if (packageName != null) {
-            val ts = launchTimestamps[packageName] ?: return false
-            return isTimestampWithinGracePeriod(ts, nowMs, graceMs)
+            return livenessTracker.isWithinGracePeriod(packageName, nowMs, graceMs)
         }
         return _runningWindows.value.any { rec ->
             !rec.isMinimized && (
                 isTimestampWithinGracePeriod(rec.lastActiveEpochMs, nowMs, graceMs) ||
-                    (launchTimestamps[rec.packageName]?.let { isTimestampWithinGracePeriod(it, nowMs, graceMs) } == true)
+                    livenessTracker.isWithinGracePeriod(rec.packageName, nowMs, graceMs)
                 )
         }
     }
@@ -255,7 +282,7 @@ class DesktopSessionRepository(context: Context) {
             _manualKeyboardRelayOpen.value = false
             _externalTextInputState.value = ExternalTextInputState()
             _externalAppVisibleOnDisplay.value = false
-            confirmedVisiblePackages.clear()
+            livenessTracker.clearAll()
         }
     }
 
@@ -452,25 +479,45 @@ class DesktopSessionRepository(context: Context) {
     }
 
     fun toggleShowDesktop() {
-        val next = !_isShowDesktopActive.value
-        _isShowDesktopActive.value = next
-        dismissFlyouts()
+        if (!_isShowDesktopActive.value) {
+            ensureShellRecovered(forceShowDesktop = true)
+        } else if (canExitShowDesktop(
+                hasVisibleWindows = _runningWindows.value.any { !it.isMinimized },
+                hasExternalAppVisible = _externalAppVisibleOnDisplay.value,
+                isLaunching = _launchingPackage.value != null
+            )
+        ) {
+            _isShowDesktopActive.value = false
+            dismissFlyouts()
+        } else {
+            ensureShellRecovered()
+        }
     }
 
     fun setShowDesktop(show: Boolean) {
-        _isShowDesktopActive.value = show
+        if (show) {
+            _isShowDesktopActive.value = true
+            if (_runningWindows.value.none { !it.isMinimized } && _launchingPackage.value == null) {
+                _externalAppVisibleOnDisplay.value = false
+            }
+        } else if (canExitShowDesktop(
+                hasVisibleWindows = _runningWindows.value.any { !it.isMinimized },
+                hasExternalAppVisible = _externalAppVisibleOnDisplay.value,
+                isLaunching = _launchingPackage.value != null
+            )
+        ) {
+            _isShowDesktopActive.value = false
+        } else {
+            ensureShellRecovered()
+        }
     }
 
     fun minimizeAllWindows() {
-        confirmedVisiblePackages.clear()
+        _runningWindows.value.forEach { livenessTracker.onWindowMinimized(it.packageName) }
         _runningWindows.update { list ->
             list.map { it.copy(isMinimized = true, isFocused = false) }
         }
-        _isShowDesktopActive.value = true
-        _externalAppVisibleOnDisplay.value = false
-        _launchingPackage.value = null
-        dismissFlyouts()
-        _desktopRecoveryEvents.tryEmit(Unit)
+        ensureShellRecovered(forceShowDesktop = true)
     }
 
     fun recordWindowLaunched(
@@ -482,10 +529,7 @@ class DesktopSessionRepository(context: Context) {
         displayId: Int
     ) {
         val now = System.currentTimeMillis()
-        launchTimestamps[packageName] = now
-        if (packageName.startsWith("dexxp.webapp.")) {
-            confirmedVisiblePackages.add(packageName)
-        }
+        livenessTracker.onWindowLaunchedOrRestored(packageName, now)
         _runningWindows.update { existing ->
             val updated = existing
                 .filterNot { it.packageName == packageName }
@@ -510,13 +554,12 @@ class DesktopSessionRepository(context: Context) {
     fun setWindowMinimized(packageName: String, minimized: Boolean) {
         val now = System.currentTimeMillis()
         if (minimized) {
-            confirmedVisiblePackages.remove(packageName)
+            livenessTracker.onWindowMinimized(packageName)
         } else {
-            launchTimestamps[packageName] = now
+            livenessTracker.onWindowLaunchedOrRestored(packageName, now)
         }
-        var shouldEmitRecovery = false
         _runningWindows.update { list ->
-            val next = list.map { rec ->
+            list.map { rec ->
                 if (rec.packageName == packageName) {
                     rec.copy(
                         isMinimized = minimized,
@@ -529,25 +572,31 @@ class DesktopSessionRepository(context: Context) {
                     rec
                 }
             }
-            val anyVisible = next.any { !it.isMinimized }
-            _externalAppVisibleOnDisplay.value = anyVisible
-            if (!anyVisible) {
-                _isShowDesktopActive.value = true
-                shouldEmitRecovery = true
-            }
-            next
         }
-        if (shouldEmitRecovery) {
-            dismissFlyouts()
-            _desktopRecoveryEvents.tryEmit(Unit)
+        val anyVisible = _runningWindows.value.any { !it.isMinimized }
+        if (anyVisible) {
+            _externalAppVisibleOnDisplay.value = true
+        } else {
+            ensureShellRecovered()
         }
     }
 
     fun setRunningWindowsSnapshot(windows: List<RunningWindowRecord>) {
+        val now = System.currentTimeMillis()
+        livenessTracker.clearAll()
+        windows.forEach { rec ->
+            if (!rec.isMinimized) {
+                livenessTracker.onWindowLaunchedOrRestored(rec.packageName, now)
+            }
+        }
         _runningWindows.value = windows
         val hasVisible = windows.any { !it.isMinimized }
-        _externalAppVisibleOnDisplay.value = hasVisible
-        _isShowDesktopActive.value = !hasVisible
+        if (hasVisible) {
+            _externalAppVisibleOnDisplay.value = true
+            _isShowDesktopActive.value = false
+        } else {
+            ensureShellRecovered(forceShowDesktop = true)
+        }
     }
 
     fun markWindowFocused(packageName: String?) {
@@ -588,46 +637,47 @@ class DesktopSessionRepository(context: Context) {
         authoritative: Boolean = false
     ) {
         val now = System.currentTimeMillis()
+        val observedVisibleKeys = HashSet<String>()
         for (pkg in detectedPackages) {
             if (pkg != appContext.packageName) {
-                confirmedVisiblePackages.add(pkg)
+                observedVisibleKeys.add(pkg)
             } else {
                 _runningWindows.value.forEach { rec ->
                     if (rec.packageName.startsWith("dexxp.webapp.") &&
                         !rec.isMinimized &&
                         DesktopWebActivity.isRecordAlive(rec.packageName)
                     ) {
-                        confirmedVisiblePackages.add(rec.packageName)
+                        observedVisibleKeys.add(rec.packageName)
                     }
                 }
             }
         }
+        if (observedVisibleKeys.isNotEmpty()) {
+            livenessTracker.onPackagesObservedVisible(observedVisibleKeys)
+        }
 
         if (authoritative) {
             val deadPackages = HashSet<String>()
-            // 1. Always purge destroyed DesktopWebActivity containers past grace period
+
+            // 1. Evaluate DesktopWebActivity containers (protected by launch grace + 2 consecutive misses)
             for (rec in _runningWindows.value) {
-                if (rec.packageName.startsWith("dexxp.webapp.") &&
-                    !DesktopWebActivity.isRecordAlive(rec.packageName) &&
-                    !isWithinLaunchGracePeriod(rec.packageName, nowMs = now)
-                ) {
+                if (!rec.packageName.startsWith("dexxp.webapp.")) continue
+                val alive = DesktopWebActivity.isRecordAlive(rec.packageName)
+                if (livenessTracker.recordVisibilityCheck(rec.packageName, isCurrentlyVisible = alive, nowEpochMs = now)) {
                     deadPackages.add(rec.packageName)
                 }
             }
 
-            // 2. Reconcile external apps dismissed from Phone Recents or crashed while desktop was NOT active
+            // 2. Reconcile external apps dismissed from Phone Recents or exited while desktop was NOT active
             if (!_isShowDesktopActive.value) {
                 if (!hasVisibleExternalApp) {
                     for (rec in _runningWindows.value) {
-                        if (rec.isMinimized) continue
-                        if (rec.packageName.startsWith("dexxp.webapp.")) {
-                            if (!DesktopWebActivity.isRecordAlive(rec.packageName) &&
-                                !isWithinLaunchGracePeriod(rec.packageName, nowMs = now)
-                            ) {
-                                deadPackages.add(rec.packageName)
-                            }
-                        } else if (rec.packageName in confirmedVisiblePackages ||
-                            !isWithinLaunchGracePeriod(rec.packageName, nowMs = now)
+                        if (rec.isMinimized || rec.packageName.startsWith("dexxp.webapp.")) continue
+                        if (livenessTracker.recordVisibilityCheck(
+                                packageName = rec.packageName,
+                                isCurrentlyVisible = false,
+                                nowEpochMs = now
+                            )
                         ) {
                             deadPackages.add(rec.packageName)
                         }
@@ -636,10 +686,15 @@ class DesktopSessionRepository(context: Context) {
                     val detectedSet = detectedPackages.toHashSet()
                     for (rec in _runningWindows.value) {
                         if (rec.isMinimized || rec.packageName.startsWith("dexxp.webapp.")) continue
-                        if (rec.isFocused &&
-                            rec.packageName in confirmedVisiblePackages &&
-                            rec.packageName !in detectedSet &&
-                            !isWithinLaunchGracePeriod(rec.packageName, nowMs = now)
+                        val wasConfirmed = livenessTracker.isConfirmedVisible(rec.packageName)
+                        val shouldCheck = (rec.isFocused || livenessTracker.getConsecutiveMissCount(rec.packageName) > 0) &&
+                            wasConfirmed &&
+                            rec.packageName !in detectedSet
+                        if (shouldCheck && livenessTracker.recordVisibilityCheck(
+                                packageName = rec.packageName,
+                                isCurrentlyVisible = false,
+                                nowEpochMs = now
+                            )
                         ) {
                             deadPackages.add(rec.packageName)
                         }
@@ -648,10 +703,6 @@ class DesktopSessionRepository(context: Context) {
             }
 
             if (deadPackages.isNotEmpty()) {
-                deadPackages.forEach { pkg ->
-                    launchTimestamps.remove(pkg)
-                    confirmedVisiblePackages.remove(pkg)
-                }
                 _runningWindows.update { list ->
                     val remaining = list.filterNot { it.packageName in deadPackages }
                     if (remaining.any { !it.isMinimized } && remaining.none { it.isFocused }) {
@@ -668,12 +719,7 @@ class DesktopSessionRepository(context: Context) {
         val hasUnminimizedWindows = _runningWindows.value.any { !it.isMinimized }
 
         if (!hasVisibleExternalApp && !hasUnminimizedWindows && _launchingPackage.value == null) {
-            val wasShowingDesktop = _isShowDesktopActive.value
-            _isShowDesktopActive.value = true
-            if (!wasShowingDesktop) {
-                dismissFlyouts()
-                _desktopRecoveryEvents.tryEmit(Unit)
-            }
+            ensureShellRecovered()
         } else if (hasVisibleExternalApp) {
             val launching = _launchingPackage.value
             if (launching != null && (focusedPackage == launching || detectedPackages.contains(launching))) {
@@ -686,102 +732,78 @@ class DesktopSessionRepository(context: Context) {
     }
 
     /**
-     * Invoked when `SecondaryDesktopActivity` (`CATEGORY_SECONDARY_HOME`) resumes at the root of
-     * the external display after having been stopped behind a fullscreen external app—signaling
-     * that the external app was dismissed/swiped from Phone Recents even when Accessibility is off.
+     * Invoked when `SecondaryDesktopActivity` (`CATEGORY_SECONDARY_HOME`) is resumed at the root
+     * of the external display after having been stopped behind a fullscreen external app.
+     * Respects both the launch grace period and the two-consecutive-misses rule.
      */
     fun onSecondaryHomeResumedAfterExternalClose() {
-        if (_isShowDesktopActive.value || _launchingPackage.value != null || isWithinLaunchGracePeriod(null)) {
+        val now = System.currentTimeMillis()
+        if (_isShowDesktopActive.value || _launchingPackage.value != null || isWithinLaunchGracePeriod(null, nowMs = now)) {
             return
         }
-        val now = System.currentTimeMillis()
-        val deadPackages = _runningWindows.value
-            .filter { rec ->
-                !rec.isMinimized && (
-                    !rec.packageName.startsWith("dexxp.webapp.") ||
-                        !DesktopWebActivity.isRecordAlive(rec.packageName)
-                    ) && !isWithinLaunchGracePeriod(rec.packageName, nowMs = now)
-            }
-            .map { it.packageName }
-            .toSet()
-
-        if (deadPackages.isNotEmpty()) {
-            deadPackages.forEach { pkg ->
-                launchTimestamps.remove(pkg)
-                confirmedVisiblePackages.remove(pkg)
-            }
-            _runningWindows.update { list -> list.filterNot { it.packageName in deadPackages } }
-        }
-        if (_runningWindows.value.none { !it.isMinimized }) {
-            requestDesktopRecovery()
-        }
-    }
-
-    /**
-     * Reconciles `runningWindows` against live `DesktopWebActivity` instances and (when exposed by
-     * the OS) live external process names from `ActivityManager.getRunningAppProcesses()`.
-     */
-    fun reconcileDeadProcesses(aliveExternalPackages: Set<String>?) {
-        val now = System.currentTimeMillis()
         val deadPackages = HashSet<String>()
         for (rec in _runningWindows.value) {
-            if (isWithinLaunchGracePeriod(rec.packageName, nowMs = now)) continue
-            if (rec.packageName.startsWith("dexxp.webapp.")) {
-                if (!DesktopWebActivity.isRecordAlive(rec.packageName)) {
-                    deadPackages.add(rec.packageName)
-                }
-            } else if (aliveExternalPackages != null && rec.packageName !in aliveExternalPackages) {
+            if (rec.isMinimized) continue
+            val isVisible = rec.packageName.startsWith("dexxp.webapp.") &&
+                DesktopWebActivity.isRecordAlive(rec.packageName)
+            if (livenessTracker.recordVisibilityCheck(
+                    packageName = rec.packageName,
+                    isCurrentlyVisible = isVisible,
+                    nowEpochMs = now
+                )
+            ) {
                 deadPackages.add(rec.packageName)
             }
         }
 
         if (deadPackages.isNotEmpty()) {
-            deadPackages.forEach { pkg ->
-                launchTimestamps.remove(pkg)
-                confirmedVisiblePackages.remove(pkg)
+            _runningWindows.update { list -> list.filterNot { it.packageName in deadPackages } }
+        }
+        ensureShellRecovered()
+    }
+
+    /**
+     * Fallback 5s watchdog check reconciling `DesktopWebActivity` instances and (when exposed by
+     * the OS) live external process names from `ActivityManager.getRunningAppProcesses()`.
+     * Never removes during the launch grace period and requires two consecutive misses.
+     */
+    fun reconcileDeadProcesses(aliveExternalPackages: Set<String>?) {
+        val now = System.currentTimeMillis()
+        val deadPackages = HashSet<String>()
+        for (rec in _runningWindows.value) {
+            if (rec.packageName.startsWith("dexxp.webapp.")) {
+                val alive = DesktopWebActivity.isRecordAlive(rec.packageName)
+                if (livenessTracker.recordVisibilityCheck(rec.packageName, isCurrentlyVisible = alive, nowEpochMs = now)) {
+                    deadPackages.add(rec.packageName)
+                }
+            } else if (aliveExternalPackages != null) {
+                val alive = rec.packageName in aliveExternalPackages
+                if (livenessTracker.recordVisibilityCheck(rec.packageName, isCurrentlyVisible = alive, nowEpochMs = now)) {
+                    deadPackages.add(rec.packageName)
+                }
             }
+        }
+
+        if (deadPackages.isNotEmpty()) {
             _runningWindows.update { list ->
                 list.filterNot { it.packageName in deadPackages }
             }
         }
-
-        if (_runningWindows.value.none { !it.isMinimized } &&
-            !_isShowDesktopActive.value &&
-            _launchingPackage.value == null &&
-            !isWithinLaunchGracePeriod(null, nowMs = now)
-        ) {
-            requestDesktopRecovery()
-        }
+        ensureShellRecovered()
     }
 
     fun removeWindowRecord(packageName: String) {
-        launchTimestamps.remove(packageName)
-        confirmedVisiblePackages.remove(packageName)
-        var shouldRecover = false
+        livenessTracker.onWindowRemoved(packageName)
         _runningWindows.update { list ->
-            val remaining = list.filterNot { it.packageName == packageName }
-            val hasVisible = remaining.any { !it.isMinimized }
-            if (!hasVisible) {
-                _externalAppVisibleOnDisplay.value = false
-                _isShowDesktopActive.value = true
-                shouldRecover = true
-            }
-            remaining
+            list.filterNot { it.packageName == packageName }
         }
-        if (shouldRecover) {
-            dismissFlyouts()
-            _desktopRecoveryEvents.tryEmit(Unit)
-        }
+        ensureShellRecovered()
     }
 
     fun clearAllWindowRecords() {
-        launchTimestamps.clear()
-        confirmedVisiblePackages.clear()
+        livenessTracker.clearAll()
         _runningWindows.value = emptyList()
-        _externalAppVisibleOnDisplay.value = false
-        _isShowDesktopActive.value = true
-        dismissFlyouts()
-        _desktopRecoveryEvents.tryEmit(Unit)
+        ensureShellRecovered(forceShowDesktop = true)
     }
 
     fun toggleTaskbarPin(packageName: String) {
@@ -897,14 +919,154 @@ class DesktopSessionRepository(context: Context) {
         scope.cancel()
     }
 
+    data class ShellRecoveryTransition(
+        val showDesktop: Boolean,
+        val externalAppVisible: Boolean,
+        val shouldDismissFlyouts: Boolean,
+        val shouldEmitRecoveryEvent: Boolean
+    )
+
+    /**
+     * Pure, thread-safe tracker enforcing:
+     * 1. Never removing or counting misses during [LAUNCH_GRACE_PERIOD_MS] after launch/restore;
+     * 2. Requiring [REQUIRED_CONSECUTIVE_MISSES] (2) consecutive "not visible" checks before
+     *    removing a window record;
+     * 3. Resetting consecutive miss counts immediately when a window is observed visible.
+     */
+    class WindowLivenessTracker {
+        private val launchTimestamps = ConcurrentHashMap<String, Long>()
+        private val confirmedVisiblePackages = ConcurrentHashMap.newKeySet<String>()
+        private val consecutiveNotVisibleCounts = ConcurrentHashMap<String, Int>()
+
+        fun onWindowLaunchedOrRestored(
+            packageName: String,
+            nowEpochMs: Long,
+            isWebApp: Boolean = packageName.startsWith("dexxp.webapp.")
+        ) {
+            launchTimestamps[packageName] = nowEpochMs
+            consecutiveNotVisibleCounts.remove(packageName)
+            if (isWebApp) {
+                confirmedVisiblePackages.add(packageName)
+            }
+        }
+
+        fun onWindowMinimized(packageName: String) {
+            confirmedVisiblePackages.remove(packageName)
+            consecutiveNotVisibleCounts.remove(packageName)
+        }
+
+        fun onWindowRemoved(packageName: String) {
+            launchTimestamps.remove(packageName)
+            confirmedVisiblePackages.remove(packageName)
+            consecutiveNotVisibleCounts.remove(packageName)
+        }
+
+        fun clearAll() {
+            launchTimestamps.clear()
+            confirmedVisiblePackages.clear()
+            consecutiveNotVisibleCounts.clear()
+        }
+
+        fun onPackagesObservedVisible(visiblePackages: Iterable<String>) {
+            for (pkg in visiblePackages) {
+                confirmedVisiblePackages.add(pkg)
+                consecutiveNotVisibleCounts.remove(pkg)
+            }
+        }
+
+        fun isConfirmedVisible(packageName: String): Boolean = packageName in confirmedVisiblePackages
+
+        fun getConsecutiveMissCount(packageName: String): Int = consecutiveNotVisibleCounts[packageName] ?: 0
+
+        fun hasPendingMisses(): Boolean = consecutiveNotVisibleCounts.values.any { it > 0 }
+
+        fun isWithinGracePeriod(
+            packageName: String,
+            nowEpochMs: Long,
+            graceMs: Long = LAUNCH_GRACE_PERIOD_MS
+        ): Boolean {
+            val ts = launchTimestamps[packageName] ?: return false
+            return isTimestampWithinGracePeriod(ts, nowEpochMs, graceMs)
+        }
+
+        /**
+         * Records one visibility observation for [packageName].
+         *
+         * @return `true` only when [packageName] is past its launch grace period AND has failed
+         *   at least [REQUIRED_CONSECUTIVE_MISSES] consecutive checks.
+         */
+        fun recordVisibilityCheck(
+            packageName: String,
+            isCurrentlyVisible: Boolean,
+            nowEpochMs: Long,
+            graceMs: Long = LAUNCH_GRACE_PERIOD_MS
+        ): Boolean {
+            if (isCurrentlyVisible) {
+                confirmedVisiblePackages.add(packageName)
+                consecutiveNotVisibleCounts.remove(packageName)
+                return false
+            }
+            if (isWithinGracePeriod(packageName, nowEpochMs, graceMs)) {
+                consecutiveNotVisibleCounts.remove(packageName)
+                return false
+            }
+            val misses = (consecutiveNotVisibleCounts[packageName] ?: 0) + 1
+            if (misses >= REQUIRED_CONSECUTIVE_MISSES) {
+                onWindowRemoved(packageName)
+                return true
+            }
+            consecutiveNotVisibleCounts[packageName] = misses
+            return false
+        }
+    }
+
     companion object {
         const val LAUNCH_GRACE_PERIOD_MS = 2500L
+        const val REQUIRED_CONSECUTIVE_MISSES = 2
 
         fun isTimestampWithinGracePeriod(
             launchEpochMs: Long,
             nowEpochMs: Long,
             graceMs: Long = LAUNCH_GRACE_PERIOD_MS
         ): Boolean = launchEpochMs > 0L && (nowEpochMs - launchEpochMs) in 0L until graceMs
+
+        fun canExitShowDesktop(
+            hasVisibleWindows: Boolean,
+            hasExternalAppVisible: Boolean,
+            isLaunching: Boolean
+        ): Boolean = hasVisibleWindows || hasExternalAppVisible || isLaunching
+
+        fun computeEnsureShellRecoveredTransition(
+            wasShowDesktopActive: Boolean,
+            wasExternalAppVisible: Boolean,
+            hasVisibleWindows: Boolean,
+            isLaunching: Boolean,
+            forceShowDesktop: Boolean = false
+        ): ShellRecoveryTransition {
+            if (forceShowDesktop) {
+                return ShellRecoveryTransition(
+                    showDesktop = true,
+                    externalAppVisible = false,
+                    shouldDismissFlyouts = true,
+                    shouldEmitRecoveryEvent = true
+                )
+            }
+            if (!hasVisibleWindows && !isLaunching) {
+                val needsRecoveryTransition = !wasShowDesktopActive || wasExternalAppVisible
+                return ShellRecoveryTransition(
+                    showDesktop = true,
+                    externalAppVisible = false,
+                    shouldDismissFlyouts = needsRecoveryTransition,
+                    shouldEmitRecoveryEvent = needsRecoveryTransition
+                )
+            }
+            return ShellRecoveryTransition(
+                showDesktop = wasShowDesktopActive,
+                externalAppVisible = if (!hasVisibleWindows) false else wasExternalAppVisible,
+                shouldDismissFlyouts = false,
+                shouldEmitRecoveryEvent = false
+            )
+        }
 
         private const val PREFS_NAME = "dexxp_desktop_prefs"
         private const val KEY_ENVIRONMENT_MODE = "environment_mode"

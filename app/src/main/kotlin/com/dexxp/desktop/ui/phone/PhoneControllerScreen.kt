@@ -341,7 +341,6 @@ fun PhoneControllerScreen(
                             }
                         },
                         onHome = {
-                            sessionRepository.setShowDesktop(true)
                             sessionRepository.minimizeAllWindows()
                             val app = context.applicationContext as? DexXpApplication
                             app?.appLauncher?.sendSecondaryHomeToFront(context)
@@ -376,7 +375,10 @@ fun PhoneControllerScreen(
                                         missionControlController.toggleOverview()
                                     }
                                     this.onThreeFingerSwipeDown = {
-                                        sessionRepository.toggleShowDesktop()
+                                        (ctx.applicationContext as? DexXpApplication)
+                                            ?.appLauncher
+                                            ?.toggleMinimizeAllOrRestore(ctx)
+                                            ?: sessionRepository.toggleShowDesktop()
                                     }
                                 }
                             },
@@ -386,7 +388,10 @@ fun PhoneControllerScreen(
                                     missionControlController.toggleOverview()
                                 }
                                 view.onThreeFingerSwipeDown = {
-                                    sessionRepository.toggleShowDesktop()
+                                    (view.context.applicationContext as? DexXpApplication)
+                                        ?.appLauncher
+                                        ?.toggleMinimizeAllOrRestore(view.context)
+                                        ?: sessionRepository.toggleShowDesktop()
                                 }
                             }
                         )

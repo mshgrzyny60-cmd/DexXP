@@ -66,9 +66,7 @@ class DesktopPointerAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         when (event?.eventType) {
-            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
-                scheduleThrottledRefresh(checkEditor = false, followUpVerify = false)
-            }
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 scheduleThrottledRefresh(checkEditor = false, followUpVerify = true)
             }
@@ -95,13 +93,14 @@ class DesktopPointerAccessibilityService : AccessibilityService() {
                 pendingCheckEditor = false
                 pendingFollowUpVerify = false
 
-                refreshExternalDisplayWindows()
+                refreshExternalDisplayWindows(forceNotify = false)
                 if (shouldCheckEditor) {
                     inspectFocusedExternalEditor()
                 }
-                if (shouldFollowUp && !refreshAgain) {
+                val app = applicationContext as? DexXpApplication
+                if ((shouldFollowUp || app?.sessionRepository?.hasPendingVisibilityMisses() == true) && !refreshAgain) {
                     delay(240)
-                    refreshExternalDisplayWindows()
+                    refreshExternalDisplayWindows(forceNotify = true)
                 }
             } while (refreshAgain)
         }
@@ -122,7 +121,7 @@ class DesktopPointerAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    fun refreshExternalDisplayWindows() {
+    fun refreshExternalDisplayWindows(forceNotify: Boolean = false) {
         val app = applicationContext as? DexXpApplication ?: return
         val activeDisplay = app.sessionRepository.activeDisplay.value
         if (activeDisplay == null) {
@@ -181,7 +180,9 @@ class DesktopPointerAccessibilityService : AccessibilityService() {
             acc * 31 + f.packageName.hashCode() * 31 + f.bounds.hashCode()
         } + frames.size
 
-        if (fingerprint == lastObservedWindowFingerprint &&
+        if (!forceNotify &&
+            !app.sessionRepository.hasPendingVisibilityMisses() &&
+            fingerprint == lastObservedWindowFingerprint &&
             packageSignature == lastDetectedPackageSignature &&
             frames.isNotEmpty()
         ) {

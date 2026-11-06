@@ -57,7 +57,7 @@ import kotlinx.coroutines.flow.update
  * Hardware Keyboard Shortcut Interceptor, `Alt + Tab` M3 Window Switcher, and Soft IME Relay.
  *
  * Intercepts global & shell key events:
- * - `Alt + F4` / `Ctrl + W`: Force-closes the currently focused window (or active terminal/flyout) and kills its background process.
+ * - `Alt + F4` / `Ctrl + W`: Closes the currently focused window (or active terminal/flyout) and shifts focus cleanly without killing background processes.
  * - `Super / Meta / Windows` solo press / `Ctrl + Escape`: Toggles Start Menu and forces the Taskbar/Shell to the front.
  * - `Super + D` (`Win + D`) / `F11`: Toggles Show Desktop (minimizes/restores all active windows and brings DexXP desktop to front).
  * - `Alt + Space` / `Super + Space`: Toggles Universal Command Palette & Spotlight (`CommandPaletteController`).

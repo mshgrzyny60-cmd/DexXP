@@ -364,7 +364,7 @@ class PointerFocusBridge(
             if (decor.isAttachedToWindow) {
                 runCatching { win.windowManager.updateViewLayout(decor, win.attributes) }
             }
-            if (requestFocus) {
+            if (requestFocus && mode != ShellSurfaceMode.DOCKED_TASKBAR) {
                 decor.post { decor.requestFocus() }
             }
         }

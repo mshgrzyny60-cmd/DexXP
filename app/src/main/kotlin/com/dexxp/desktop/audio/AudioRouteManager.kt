@@ -2,7 +2,6 @@ package com.dexxp.desktop.audio
 
 import android.content.Context
 import android.content.Intent
-import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
@@ -29,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import com.dexxp.desktop.launcher.HiddenApiCompat
 import com.dexxp.desktop.model.AudioEndpointCategory
 import com.dexxp.desktop.model.AudioOutputRoute
 import com.dexxp.desktop.ui.icons.DesktopIcons
@@ -127,8 +127,11 @@ class AudioRouteManager(context: Context) {
         val targetInfo = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
             .firstOrNull { it.id == route.deviceId } ?: return false
 
-        // 1. Attempt AOSP AudioProductStrategy media routing (`setPreferredDeviceForStrategy`)
-        val strategyRouted = applyPreferredDeviceForMediaStrategy(am, targetInfo)
+        // 1. Attempt AOSP AudioProductStrategy media routing via HiddenApiCompat.
+        // If this @SystemApi is unavailable or denied on unprivileged builds, returns false and
+        // execution falls back cleanly to public Android 12+ setCommunicationDevice below (or the
+        // SystemUI Media Output Switcher panel).
+        val strategyRouted = HiddenApiCompat.trySetPreferredDeviceForMediaStrategy(am, targetInfo)
 
         // 2. Apply public Android 12+ communication device routing
         val commRouted = runCatching {
@@ -181,42 +184,6 @@ class AudioRouteManager(context: Context) {
             runCatching { ctx.startActivity(fallback) }
         }
     }
-
-    @Suppress("PrivateApi")
-    private fun applyPreferredDeviceForMediaStrategy(
-        am: AudioManager,
-        deviceInfo: AudioDeviceInfo
-    ): Boolean = runCatching {
-        val strategyClass = Class.forName("android.media.audiopolicy.AudioProductStrategy")
-        val deviceAttrClass = Class.forName("android.media.AudioDeviceAttributes")
-
-        val getStrategiesMethod = strategyClass.getMethod("getAudioProductStrategies")
-        val strategies = getStrategiesMethod.invoke(null) as? List<*> ?: return false
-
-        val mediaAttrs = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-            .build()
-
-        val supportsMethod = strategyClass.getMethod(
-            "supportsAudioAttributes",
-            AudioAttributes::class.java
-        )
-        val mediaStrategy = strategies.firstOrNull { strategy ->
-            strategy != null && (supportsMethod.invoke(strategy, mediaAttrs) as? Boolean == true)
-        } ?: strategies.firstOrNull() ?: return false
-
-        val attrCtor = deviceAttrClass.getConstructor(AudioDeviceInfo::class.java)
-        val deviceAttributes = attrCtor.newInstance(deviceInfo)
-
-        val setPreferredMethod = AudioManager::class.java.getMethod(
-            "setPreferredDeviceForStrategy",
-            strategyClass,
-            deviceAttrClass
-        )
-        setPreferredMethod.invoke(am, mediaStrategy, deviceAttributes)
-        true
-    }.getOrDefault(false)
 
     private fun classifySink(type: Int): AudioEndpointCategory? = when (type) {
         AudioDeviceInfo.TYPE_HDMI,

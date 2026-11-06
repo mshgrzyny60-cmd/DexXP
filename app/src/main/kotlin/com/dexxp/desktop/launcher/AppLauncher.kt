@@ -1,6 +1,5 @@
 package com.dexxp.desktop.launcher
 
-import android.app.ActivityManager
 import android.app.ActivityOptions
 import android.app.PendingIntent
 import android.content.Context
@@ -10,7 +9,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.util.Log
 import android.view.Display
 import com.dexxp.desktop.SecondaryDesktopActivity
 import com.dexxp.desktop.StandaloneDesktopActivity
@@ -84,12 +82,11 @@ class AppLauncher(
         snapMode: WindowSnapMode = WindowSnapMode.MAXIMIZED,
         launchContext: Context? = null
     ): Boolean {
-        sessionRepository.removeWindowRecord("com.lemon.lvoverseas")
-        sessionRepository.removeWindowRecord("com.capcut.editor")
-        runCatching {
-            val am = appContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-            am?.killBackgroundProcesses("com.lemon.lvoverseas")
-            am?.killBackgroundProcesses("com.capcut.editor")
+        if (sessionRepository.runningWindows.value.any { it.packageName == "com.lemon.lvoverseas" }) {
+            sessionRepository.removeWindowRecord("com.lemon.lvoverseas")
+        }
+        if (sessionRepository.runningWindows.value.any { it.packageName == "com.capcut.editor" }) {
+            sessionRepository.removeWindowRecord("com.capcut.editor")
         }
         val displayInfo = sessionRepository.activeDisplay.value
         val recordKey = "dexxp.webapp.capcut_web"
@@ -156,7 +153,6 @@ class AppLauncher(
             targetPackage = targetPkg
         )
         if (launched) {
-            sessionRepository.setShowDesktop(false)
             sessionRepository.recordWindowLaunched(
                 packageName = targetPkg,
                 activityName = launchIntent.component?.className.orEmpty(),
@@ -224,7 +220,6 @@ class AppLauncher(
             if (useFreeform && effectiveSnap == WindowSnapMode.FREEFORM_CASCADED) {
                 rememberedBounds[app.packageName] = Rect(bounds)
             }
-            sessionRepository.setShowDesktop(false)
             sessionRepository.recordWindowLaunched(
                 packageName = app.packageName,
                 activityName = app.activityName,
@@ -374,8 +369,8 @@ class AppLauncher(
                     useFreeformWindowing = useFreeform
                 )
                 if (DesktopWebActivity.bringToFrontByRecordKey(packageName, options)) {
-                    sessionRepository.setShowDesktop(false)
                     sessionRepository.setWindowMinimized(packageName, minimized = false)
+                    sessionRepository.setShowDesktop(false)
                     sessionRepository.markWindowFocused(packageName)
                     return true
                 }
@@ -537,8 +532,8 @@ class AppLauncher(
             .sortedByDescending { it.lastActiveEpochMs }
 
         if (remainingVisible.isEmpty()) {
+            sessionRepository.ensureShellRecovered(forceShowDesktop = true)
             sendSecondaryHomeToFront(launchContext)
-            sessionRepository.setShowDesktop(true)
         } else {
             val nextTop = remainingVisible.first()
             sessionRepository.setWindowMinimized(nextTop.packageName, minimized = false)
@@ -555,8 +550,8 @@ class AppLauncher(
         } ?: return
 
         if (record.isMinimized || sessionRepository.isShowDesktopActive.value) {
-            sessionRepository.setShowDesktop(false)
             sessionRepository.setWindowMinimized(packageName, minimized = false)
+            sessionRepository.setShowDesktop(false)
             launchOrFocusPackage(packageName, record.snapMode, launchContext)
             return
         }
@@ -631,8 +626,9 @@ class AppLauncher(
     }
 
     /**
-     * Closes the target window cleanly, removing its task/record, shifting focus to the next visible
-     * window (or returning to the desktop wallpaper), and reclaiming background app processes.
+     * Closes the target window cleanly, removing its window record and shifting focus to the next
+     * visible window (or bringing the secondary desktop home to the front). Never kills background
+     * processes so push notifications (WhatsApp, Gmail, etc.) remain intact.
      */
     fun closeWindow(packageName: String, launchContext: Context? = null) {
         val wasFocused = !sessionRepository.isShowDesktopActive.value &&
@@ -651,21 +647,12 @@ class AppLauncher(
             .sortedByDescending { it.lastActiveEpochMs }
 
         if (remainingVisible.isEmpty()) {
+            sessionRepository.ensureShellRecovered(forceShowDesktop = true)
             sendSecondaryHomeToFront(launchContext)
-            sessionRepository.setShowDesktop(true)
         } else {
             val nextTop = remainingVisible.first()
             sessionRepository.setWindowMinimized(nextTop.packageName, minimized = false)
             launchOrFocusPackage(nextTop.packageName, nextTop.snapMode, launchContext)
-        }
-
-        if (!packageName.startsWith("dexxp.webapp.")) {
-            val am = appContext.getSystemService(ActivityManager::class.java)
-            runCatching { am?.killBackgroundProcesses(packageName) }
-            CoroutineScope(Dispatchers.Default).launch {
-                delay(180)
-                runCatching { am?.killBackgroundProcesses(packageName) }
-            }
         }
     }
 
@@ -725,19 +712,20 @@ class AppLauncher(
     fun toggleMinimizeAllOrRestore(launchContext: Context? = null) {
         val currentlyShowingDesktop = sessionRepository.isShowDesktopActive.value
         val windows = sessionRepository.runningWindows.value
-        if (!currentlyShowingDesktop && windows.isNotEmpty()) {
-            sessionRepository.setShowDesktop(true)
-            sessionRepository.dismissFlyouts()
+        if (!currentlyShowingDesktop && windows.any { !it.isMinimized }) {
+            sessionRepository.ensureShellRecovered(forceShowDesktop = true)
             sendSecondaryHomeToFront(launchContext)
         } else if (windows.isNotEmpty()) {
-            sessionRepository.setShowDesktop(false)
             val top = sessionRepository.focusedOrMostRecentWindow(includeMinimized = true)
             if (top != null) {
                 sessionRepository.setWindowMinimized(top.packageName, minimized = false)
+                sessionRepository.setShowDesktop(false)
                 launchOrFocusPackage(top.packageName, top.snapMode, launchContext)
+            } else {
+                sessionRepository.ensureShellRecovered(forceShowDesktop = true)
             }
         } else {
-            sessionRepository.toggleShowDesktop()
+            sessionRepository.ensureShellRecovered(forceShowDesktop = true)
         }
     }
 
@@ -772,8 +760,31 @@ class AppLauncher(
             launchBounds = bounds
         )
         return runCatching {
+            val resolvedInfo = appContext.packageManager.resolveActivity(viewIntent, 0)?.activityInfo
+            val resolvedPkg = resolvedInfo?.packageName
             (launchContext ?: appContext).startActivity(viewIntent, bundle)
-            sessionRepository.setShowDesktop(false)
+            if (!resolvedPkg.isNullOrBlank() &&
+                resolvedPkg != "android" &&
+                resolvedPkg != appContext.packageName
+            ) {
+                val appLabel = runCatching {
+                    resolvedInfo.loadLabel(appContext.packageManager).toString()
+                }.getOrDefault(resolvedPkg.substringAfterLast('.'))
+                sessionRepository.recordWindowLaunched(
+                    packageName = resolvedPkg,
+                    activityName = resolvedInfo.name.orEmpty(),
+                    label = appLabel,
+                    bounds = bounds,
+                    snapMode = WindowSnapMode.FREEFORM_CASCADED,
+                    displayId = targetDisplayId
+                )
+            } else {
+                sessionRepository.updateExternalWindowVisibility(
+                    hasVisibleExternalApp = true,
+                    focusedPackage = null
+                )
+                sessionRepository.setShowDesktop(false)
+            }
             true
         }.getOrDefault(false)
     }
@@ -892,6 +903,7 @@ class AppLauncher(
         val basicOptions = ActivityOptions.makeBasic().apply {
             setLaunchDisplayId(targetDisplayId)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                @Suppress("DEPRECATION")
                 setPendingIntentBackgroundActivityStartMode(
                     ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
                 )
@@ -923,19 +935,16 @@ class AppLauncher(
         launchBounds: Rect? = null,
         useFreeformWindowing: Boolean = false
     ): Bundle {
-        val effectiveFreeform = !isTvMode && useFreeformWindowing && launchBounds != null && !launchBounds.isEmpty
-        val options = ActivityOptions.makeBasic().apply {
-            setLaunchDisplayId(targetDisplayId)
-            if (effectiveFreeform) {
-                setLaunchBounds(launchBounds)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                setPendingIntentBackgroundActivityStartMode(
-                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
-                )
-            }
-        }
-        return options.toBundle()
+        // Delegates to HiddenApiCompat: if reflective ActivityOptions.setLaunchWindowingMode(5) is
+        // blocked on Android 12–15, falls back cleanly to plain public
+        // ActivityOptions.makeBasic().setLaunchDisplayId(...) + setLaunchBounds(...) without writing
+        // hidden keys like "android.activity.windowingMode" into the Bundle.
+        return HiddenApiCompat.createLaunchActivityOptionsBundle(
+            targetDisplayId = targetDisplayId,
+            isTvMode = isTvMode,
+            launchBounds = launchBounds,
+            useFreeformWindowing = useFreeformWindowing
+        )
     }
 
     private fun buildFreeformActivityOptions(

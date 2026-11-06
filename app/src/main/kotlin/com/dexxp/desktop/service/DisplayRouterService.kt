@@ -43,6 +43,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
@@ -163,12 +165,27 @@ class DisplayRouterService : Service() {
             }
         }
 
-        // 1-second liveness watchdog: reconciles externally killed apps & auto-dismissed Presentations
+        // Fallback 5-second watchdog: Accessibility events are primary; this loop runs ONLY while
+        // an external display is connected AND at least one non-minimized window record exists,
+        // stopping completely whenever there are no visible windows or no external display.
         serviceScope.launch {
-            while (isActive) {
-                delay(1000)
-                runExternalAppWatchdogTick()
+            combine(
+                dexApp.sessionRepository.activeDisplay,
+                dexApp.sessionRepository.runningWindows
+            ) { display, windows ->
+                shouldRunFallbackWatchdog(
+                    hasActiveExternalDisplay = display != null,
+                    nonMinimizedWindowCount = windows.count { !it.isMinimized }
+                )
             }
+                .distinctUntilChanged()
+                .collectLatest { shouldWatch ->
+                    if (!shouldWatch) return@collectLatest
+                    while (isActive) {
+                        delay(FALLBACK_WATCHDOG_INTERVAL_MS)
+                        runExternalAppWatchdogTick()
+                    }
+                }
         }
 
         serviceScope.launch {
@@ -254,27 +271,29 @@ class DisplayRouterService : Service() {
             bindPresentationToDisplay(display)
         }
 
-        // 2. Poll Accessibility window tree on the external display to catch dismissed/swiped apps
-        DesktopPointerAccessibilityService.instance?.refreshExternalDisplayWindows()
-
-        // 3. Reconcile DesktopWebActivity instances & (when exposed by OS) running process list
-        val am = getSystemService(ActivityManager::class.java)
-        val runningProcs = runCatching { am?.runningAppProcesses }.getOrNull().orEmpty()
-        val exposedExternalPackages: Set<String>? = if (
-            runningProcs.any { proc -> proc.pkgList?.any { it != packageName } == true }
-        ) {
-            buildSet {
-                for (proc in runningProcs) {
-                    proc.pkgList?.forEach { add(it) }
-                    if (proc.processName.isNotBlank()) {
-                        add(proc.processName.substringBefore(':'))
+        // 2. Fallback window reconciliation (1 check per 5s tick; requires 2 consecutive misses after grace period)
+        val a11y = DesktopPointerAccessibilityService.instance
+        if (a11y != null) {
+            a11y.refreshExternalDisplayWindows(forceNotify = true)
+        } else {
+            val am = getSystemService(ActivityManager::class.java)
+            val runningProcs = runCatching { am?.runningAppProcesses }.getOrNull().orEmpty()
+            val exposedExternalPackages: Set<String>? = if (
+                runningProcs.any { proc -> proc.pkgList?.any { it != packageName } == true }
+            ) {
+                buildSet {
+                    for (proc in runningProcs) {
+                        proc.pkgList?.forEach { add(it) }
+                        if (proc.processName.isNotBlank()) {
+                            add(proc.processName.substringBefore(':'))
+                        }
                     }
                 }
+            } else {
+                null
             }
-        } else {
-            null
+            dexApp.sessionRepository.reconcileDeadProcesses(exposedExternalPackages)
         }
-        dexApp.sessionRepository.reconcileDeadProcesses(exposedExternalPackages)
     }
 
     fun evaluateAndBindExternalDisplays() {
@@ -598,6 +617,12 @@ class DisplayRouterService : Service() {
         private const val TAG = "DisplayRouterService"
         private const val CHANNEL_ID = "dexxp_display_router"
         private const val NOTIFICATION_ID = 4102
+        const val FALLBACK_WATCHDOG_INTERVAL_MS = 5_000L
+
+        fun shouldRunFallbackWatchdog(
+            hasActiveExternalDisplay: Boolean,
+            nonMinimizedWindowCount: Int
+        ): Boolean = hasActiveExternalDisplay && nonMinimizedWindowCount > 0
 
         const val ACTION_STOP_DESKTOP_ENGINE = "com.dexxp.desktop.action.STOP_ENGINE"
         const val ACTION_RESCAN_DISPLAYS = "com.dexxp.desktop.action.RESCAN_DISPLAYS"
