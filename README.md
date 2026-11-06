@@ -10,7 +10,7 @@
 [![Download APK](https://img.shields.io/github/v/release/mshgrzyny60-cmd/DexXP?label=Download%20APK&style=for-the-badge&logo=android&color=brightgreen)](https://github.com/mshgrzyny60-cmd/DexXP/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
-**An ultra-lightweight, commercial-grade open-source Samsung DeX alternative for standard unrooted Android 12–17+ (`API 31`–`API 36+`) devices.**
+**A lightweight, experimental open-source Samsung DeX alternative for unrooted Android 12+ (`API 31`+) devices.**
 
 *Supports USB-C DisplayPort Alt-Mode, HDMI, Wireless Cast / Miracast, and Standalone On-Device Landscape Desktop.*
 
@@ -22,7 +22,14 @@
 > ### 🤖 100% AI-Generated Codebase & Architecture Disclaimer
 > **This entire project — including all 18,100+ lines of production Kotlin code across 39 classes, architectural system design, AOSP windowing internals, custom accessibility gesture bridges, R8 ProGuard rules, and Gradle build pipelines — was 100% authored and engineered by Artificial Intelligence (Google Gemini / Antigravity).**
 >
-> It contains zero handwritten third-party boilerplate and zero `// TODO` stubs. It stands as an end-to-end proof of concept that modern agentic AI can architect, implement, compile, and deploy an operating system desktop environment targeting complex, undocumented mobile OS internals.
+> It is an experiment in how far agentic AI can go building a desktop shell on top of Android's multi-display and windowing internals. Expect rough edges and device-specific bugs.
+
+> [!WARNING]
+> ### Status & Known Limitations
+> - **Tested device:** Xiaomi 11T (HyperOS, Android 14) via scrcpy virtual display. Other phones, Android versions, and HDMI / DP Alt-Mode setups are untested. Reports are welcome.
+> - **Window behavior** relies on Android freeform support and some hidden platform options. OEM updates (especially MIUI / HyperOS) can change or break it.
+> - **CapCut Desktop Studio is experimental.** It works by presenting a desktop Chrome user agent to the website. CapCut can block this at any time, and it may conflict with their terms of service.
+> - Release APKs are currently **debug builds**.
 
 ---
 
@@ -34,7 +41,7 @@ For years, desktop productivity on Android was either locked behind **vendor exc
 - **Standalone & scrcpy Ready:** Works standalone on monitors/TVs without a PC, or pairs seamlessly with **scrcpy** (`scrcpy --new-display`) to stream a dedicated virtual desktop to your PC, Mac, or Linux laptop with full mouse and keyboard forwarding.
 - **Hardware constraints:** Millions of modern phones (Xiaomi, Redmi, Poco, older Pixels) ship with USB 2.0 ports without physical DisplayPort Alt-Mode wiring.
 
-**DexXP solves this without Root**, combining modern Android 12–17+ APIs into a cohesive, lightning-fast desktop shell designed in Material Design 3.
+**DexXP solves this without Root**, combining modern Android 12+ APIs into a desktop shell designed in Material Design 3.
 
 ---
 
@@ -111,7 +118,7 @@ DexXP is engineered for extreme battery efficiency and minimal RAM overhead:
 
 - **Zero Bloat Icons**: Custom Material 3 vector paths (`DesktopIcons.kt`, ~4 KB) completely eliminate the `material-icons-extended` dependency, saving **~28 MB** from the APK.
 - **Aggressive R8 Full-Mode**: `-optimizationpasses 5`, `-repackageclasses 'd'`, and aggressive reflection pruning result in a microscopic release binary.
-- **Zero-Allocation Touch Loop**: Coalesced historical touch events, primitive ring buffers (`FloatArray`/`LongArray`), and hardware-accelerated `RenderNode` sprite translations guarantee jitter-free **120Hz/240Hz cursor motion**.
+- **Zero-Allocation Touch Loop**: Coalesced historical touch events, primitive ring buffers (`FloatArray`/`LongArray`), and hardware-accelerated `RenderNode` sprite translations aim for smooth **120Hz/240Hz cursor motion**.
 - **Leaf-Scoped Recomposition**: Clocks, battery indicators, and Wi-Fi telemetry widgets are isolated inside dedicated leaf `@Composable` nodes to prevent desktop recomposition cascades.
 
 ---
