@@ -278,14 +278,14 @@ class PointerFocusBridge(
         flags = flags or
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-            WindowManager.LayoutParams.FLAG_SPLIT_TOUCH
+            WindowManager.LayoutParams.FLAG_SPLIT_TOUCH or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
         flags = flags and WindowManager.LayoutParams.FLAG_DIM_BEHIND.inv()
 
         if (mode == ShellSurfaceMode.DOCKED_TASKBAR) {
-            flags = flags and WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN.inv()
             flags = flags and WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH.inv()
         } else {
-            flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
             flags = flags or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
         }
 
@@ -337,6 +337,11 @@ class PointerFocusBridge(
             window.attributes = lp
             if (decorView.isAttachedToWindow) {
                 runCatching { window.windowManager.updateViewLayout(decorView, lp) }
+            }
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            WindowInsetsControllerCompat(window, decorView).apply {
+                hide(WindowInsetsCompat.Type.systemBars())
+                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
             if (mode == ShellSurfaceMode.FLYOUT_ACTIVE && needsKeyboardFocus) {
                 decorView.post { decorView.requestFocus() }

@@ -69,6 +69,15 @@ class SecondaryDesktopActivity : ComponentActivity() {
             finish()
             return
         }
+
+        val app = application as DexXpApplication
+        // DesktopWindowPresentation already provides the full edge-to-edge desktop canvas
+        // on the external display. If Xiaomi HyperOS or Android attempts to launch SecondaryDesktopActivity
+        // as an Activity, self-terminate immediately so HyperOS never encapsulates it in a floating window.
+        if (app.sessionRepository.activeDisplay.value?.displayId == currentDisplayId) {
+            finish()
+            return
+        }
         hostedDisplayId = currentDisplayId
         displayManager = getSystemService(DisplayManager::class.java)?.also { dm ->
             dm.registerDisplayListener(cableDisconnectListener, Handler(Looper.getMainLooper()))
@@ -77,8 +86,6 @@ class SecondaryDesktopActivity : ComponentActivity() {
         DisplayRouterService.start(this)
 
         applyStickyImmersiveSystemBars()
-
-        val app = application as DexXpApplication
 
         setContent {
             DexXPTheme(allowDynamicColorOnPhone = false) {
