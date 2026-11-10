@@ -6,6 +6,7 @@ import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.Display
 import android.view.Gravity
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -16,6 +17,7 @@ import android.view.WindowManager
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.dexxp.desktop.browser.DesktopWebActivity
 import com.dexxp.desktop.launcher.AppLauncher
 import com.dexxp.desktop.model.DesktopEnvironmentMode
 import com.dexxp.desktop.model.ExternalWindowFrame
@@ -113,9 +115,28 @@ class PointerFocusBridge(
     @Volatile
     private var lastHardwareY: Float = 540f
 
+    @Volatile
+    var lastHardwarePointerActivityElapsedMs: Long = 0L
+        private set
+
     // Pre-allocated reusable buffers eliminating 120-240Hz pointer hover/drag GC churn
     private val dispatchLock = Any()
     private val reusableTitlebarBounds = Rect()
+    private val reusableWebAppBounds = Rect()
+    private val releasePrimaryButtonRunnable = Runnable {
+        _pointerState.update { current ->
+            if (!current.isDragging && current.isPrimaryDown) {
+                current.copy(isPrimaryDown = false)
+            } else {
+                current
+            }
+        }
+    }
+    private val releaseSecondaryButtonRunnable = Runnable {
+        _pointerState.update { current ->
+            if (current.isSecondaryDown) current.copy(isSecondaryDown = false) else current
+        }
+    }
     private val reusablePointerProps = arrayOf(
         MotionEvent.PointerProperties().apply {
             id = 0
@@ -190,6 +211,8 @@ class PointerFocusBridge(
      * immediately when an HDMI / USB-C DP monitor disconnects mid-session.
      */
     fun onExternalDisplayDisconnected() {
+        mainHandler.removeCallbacks(releasePrimaryButtonRunnable)
+        mainHandler.removeCallbacks(releaseSecondaryButtonRunnable)
         presentationTarget = null
         backdropTarget = null
         titlebarOverlayTarget = null
@@ -410,6 +433,7 @@ class PointerFocusBridge(
         val ny = screenY.coerceIn(0f, maxY)
         lastHardwareX = nx
         lastHardwareY = ny
+        lastHardwarePointerActivityElapsedMs = SystemClock.elapsedRealtime()
 
         if (!isDown && isInBottomEdgeRevealZone(ny, snapshot.displayHeight)) {
             onBottomEdgeHoverReveal()
@@ -497,12 +521,15 @@ class PointerFocusBridge(
             }
         }
 
-        if (state.isDragging && !activeDragTargetIsShell) {
+        if (state.isDragging && !activeDragTargetIsShell && !activeDragTargetIsTitlebar) {
             snappingController.onPointerDragMoved(
                 x = state.x,
                 y = state.y,
                 displayInfo = sessionRepository.activeDisplay.value
             )
+            if (DesktopPointerAccessibilityService.instance == null) {
+                dispatchFallbackWebAppDragMove(state.x, state.y)
+            }
         }
 
         val titlebarHit = resolveTitlebarOverlayAt(state.x, state.y, reusableTitlebarBounds)
@@ -544,6 +571,7 @@ class PointerFocusBridge(
     }
 
     fun performPrimaryClick() {
+        mainHandler.removeCallbacks(releasePrimaryButtonRunnable)
         val (px, py) = currentEffectiveCoordinates(_pointerState.value)
         val now = SystemClock.uptimeMillis()
         _pointerState.update {
@@ -570,7 +598,7 @@ class PointerFocusBridge(
                 0,
                 now
             )
-            _pointerState.update { it.copy(isPrimaryDown = false) }
+            mainHandler.postDelayed(releasePrimaryButtonRunnable, 40L)
             return
         }
 
@@ -580,24 +608,54 @@ class PointerFocusBridge(
             dispatchMouseMotionToShell(shellTarget, MotionEvent.ACTION_UP, px, py, 0, now)
         } else {
             val displayId = sessionRepository.activeDisplay.value?.displayId
-            if (displayId != null) {
+            val dispatched = if (displayId != null && displayId != Display.DEFAULT_DISPLAY) {
                 DesktopPointerAccessibilityService.instance?.dispatchTapOnDisplay(
                     displayId = displayId,
                     x = px,
                     y = py,
-                    durationMs = 48L
-                )
+                    durationMs = 40L
+                ) == true
+            } else {
+                false
+            }
+            if (!dispatched) {
+                dispatchFallbackWebAppClick(px, py, MotionEvent.BUTTON_PRIMARY, now)
             }
         }
 
-        _pointerState.update { it.copy(isPrimaryDown = false) }
+        mainHandler.postDelayed(releasePrimaryButtonRunnable, 40L)
     }
 
     fun performSecondaryClick() {
+        mainHandler.removeCallbacks(releaseSecondaryButtonRunnable)
         val (px, py) = currentEffectiveCoordinates(_pointerState.value)
         val now = SystemClock.uptimeMillis()
         _pointerState.update {
             it.copy(x = px, y = py, visible = true, isSecondaryDown = true, lastInteractionMs = now, isHardwarePointer = false)
+        }
+
+        val titlebarHit = resolveTitlebarOverlayAt(px, py, reusableTitlebarBounds)
+        if (titlebarHit != null) {
+            dispatchMouseMotionToOverlayView(
+                titlebarHit,
+                reusableTitlebarBounds,
+                MotionEvent.ACTION_DOWN,
+                px,
+                py,
+                MotionEvent.BUTTON_SECONDARY,
+                now
+            )
+            dispatchMouseMotionToOverlayView(
+                titlebarHit,
+                reusableTitlebarBounds,
+                MotionEvent.ACTION_UP,
+                px,
+                py,
+                0,
+                now
+            )
+            mainHandler.postDelayed(releaseSecondaryButtonRunnable, 60L)
+            return
         }
 
         val shellTarget = resolveShellTargetAt(px, py)
@@ -607,20 +665,26 @@ class PointerFocusBridge(
             dispatchMouseMotionToShell(shellTarget, MotionEvent.ACTION_UP, px, py, 0, now)
         } else {
             val displayId = sessionRepository.activeDisplay.value?.displayId
-            if (displayId != null) {
+            val dispatched = if (displayId != null && displayId != Display.DEFAULT_DISPLAY) {
                 DesktopPointerAccessibilityService.instance?.dispatchTapOnDisplay(
                     displayId = displayId,
                     x = px,
                     y = py,
                     durationMs = 520L
-                )
+                ) == true
+            } else {
+                false
+            }
+            if (!dispatched) {
+                dispatchFallbackWebAppClick(px, py, MotionEvent.BUTTON_SECONDARY, now)
             }
         }
 
-        _pointerState.update { it.copy(isSecondaryDown = false) }
+        mainHandler.postDelayed(releaseSecondaryButtonRunnable, 60L)
     }
 
     fun beginDrag() {
+        mainHandler.removeCallbacks(releasePrimaryButtonRunnable)
         val (px, py) = currentEffectiveCoordinates(_pointerState.value)
         val now = SystemClock.uptimeMillis()
         activeDownTimeMs = now
@@ -679,6 +743,18 @@ class PointerFocusBridge(
                 buttonState = MotionEvent.BUTTON_PRIMARY,
                 downTime = now
             )
+        } else if (DesktopPointerAccessibilityService.instance == null) {
+            resolveFocusedWebAppWindow()?.let { (win, bounds) ->
+                dispatchMouseMotionToWindow(
+                    window = win,
+                    winBounds = bounds,
+                    action = MotionEvent.ACTION_DOWN,
+                    screenX = px,
+                    screenY = py,
+                    buttonState = MotionEvent.BUTTON_PRIMARY,
+                    downTime = now
+                )
+            }
         }
     }
 
@@ -727,7 +803,7 @@ class PointerFocusBridge(
             if (!snapped) {
                 val displayId = sessionRepository.activeDisplay.value?.displayId
                 val distance = hypot(state.x - dragOriginX, state.y - dragOriginY)
-                if (displayId != null && distance >= 4f) {
+                val dispatched = if (displayId != null && displayId != Display.DEFAULT_DISPLAY && distance >= 4f) {
                     DesktopPointerAccessibilityService.instance?.dispatchDragOnDisplay(
                         displayId = displayId,
                         startX = dragOriginX,
@@ -735,7 +811,22 @@ class PointerFocusBridge(
                         endX = state.x,
                         endY = state.y,
                         durationMs = 220L
-                    )
+                    ) == true
+                } else {
+                    false
+                }
+                if (!dispatched && DesktopPointerAccessibilityService.instance == null) {
+                    resolveFocusedWebAppWindow()?.let { (win, bounds) ->
+                        dispatchMouseMotionToWindow(
+                            window = win,
+                            winBounds = bounds,
+                            action = MotionEvent.ACTION_UP,
+                            screenX = state.x,
+                            screenY = state.y,
+                            buttonState = 0,
+                            downTime = activeDownTimeMs
+                        )
+                    }
                 }
             }
         }
@@ -754,21 +845,30 @@ class PointerFocusBridge(
     fun performScroll(verticalDelta: Float, horizontalDelta: Float) {
         val (px, py) = currentEffectiveCoordinates(_pointerState.value)
         val now = SystemClock.uptimeMillis()
-        _pointerState.update { it.copy(x = px, y = py, visible = true, lastInteractionMs = now) }
+        _pointerState.update {
+            it.copy(x = px, y = py, visible = true, lastInteractionMs = now, isHardwarePointer = false)
+        }
 
         val shellTarget = resolveShellTargetAt(px, py)
         if (shellTarget != null) {
             dispatchMouseScrollToShell(shellTarget, px, py, verticalDelta, horizontalDelta)
         } else {
             val displayId = sessionRepository.activeDisplay.value?.displayId
-            if (displayId != null) {
+            val dispatched = if (displayId != null && displayId != Display.DEFAULT_DISPLAY) {
                 DesktopPointerAccessibilityService.instance?.dispatchScrollSwipeOnDisplay(
                     displayId = displayId,
                     centerX = px,
                     centerY = py,
                     scrollDeltaX = horizontalDelta * 110f,
                     scrollDeltaY = verticalDelta * 110f
-                )
+                ) == true
+            } else {
+                false
+            }
+            if (!dispatched && DesktopPointerAccessibilityService.instance == null) {
+                resolveFocusedWebAppWindow()?.let { (win, bounds) ->
+                    dispatchMouseScrollToWindow(win, bounds, px, py, verticalDelta, horizontalDelta)
+                }
             }
         }
     }
@@ -810,7 +910,22 @@ class PointerFocusBridge(
         val py = screenY.roundToInt()
 
         presentationTarget?.let { pres ->
-            if (pres.screenBoundsProvider().contains(px, py)) return pres
+            val decor = pres.window.peekDecorView()
+            if (decor?.visibility == View.VISIBLE && pres.screenBoundsProvider().contains(px, py)) {
+                return pres
+            }
+        }
+
+        // In DOCKED_TASKBAR mode an external/running app owns the workspace above the 56dp taskbar
+        // and SecondaryDesktopActivity has moved to back—never route touchpad taps to backdropTarget!
+        if (!shouldAllowBackdropHitTesting(
+                shellSurfaceMode = sessionRepository.shellSurfaceMode.value,
+                isShowDesktopActive = sessionRepository.isShowDesktopActive.value,
+                hasUnminimizedWindows = sessionRepository.runningWindows.value.any { !it.isMinimized },
+                hasExternalAppVisible = sessionRepository.externalAppVisibleOnDisplay.value
+            )
+        ) {
+            return null
         }
 
         val coveredByExternalWindow = externalWindowBounds.any { it.contains(px, py) } ||
@@ -820,9 +935,45 @@ class PointerFocusBridge(
         if (coveredByExternalWindow) return null
 
         backdropTarget?.let { backdrop ->
-            if (backdrop.screenBoundsProvider().contains(px, py)) return backdrop
+            val decor = backdrop.window.peekDecorView()
+            if (decor?.visibility == View.VISIBLE && backdrop.screenBoundsProvider().contains(px, py)) {
+                return backdrop
+            }
         }
         return null
+    }
+
+    private fun resolveFocusedWebAppWindow(): Pair<Window, Rect>? {
+        val top = sessionRepository.focusedOrMostRecentWindow() ?: return null
+        if (!top.packageName.startsWith("dexxp.webapp.")) return null
+        val win = DesktopWebActivity.resolveActiveWindowForPointer(top.packageName, reusableWebAppBounds)
+            ?: return null
+        return win to reusableWebAppBounds
+    }
+
+    private fun dispatchFallbackWebAppClick(
+        screenX: Float,
+        screenY: Float,
+        buttonState: Int,
+        downTime: Long
+    ) {
+        val (win, bounds) = resolveFocusedWebAppWindow() ?: return
+        if (!bounds.contains(screenX.roundToInt(), screenY.roundToInt())) return
+        dispatchMouseMotionToWindow(win, bounds, MotionEvent.ACTION_DOWN, screenX, screenY, buttonState, downTime)
+        dispatchMouseMotionToWindow(win, bounds, MotionEvent.ACTION_UP, screenX, screenY, 0, downTime)
+    }
+
+    private fun dispatchFallbackWebAppDragMove(screenX: Float, screenY: Float) {
+        val (win, bounds) = resolveFocusedWebAppWindow() ?: return
+        dispatchMouseMotionToWindow(
+            window = win,
+            winBounds = bounds,
+            action = MotionEvent.ACTION_MOVE,
+            screenX = screenX,
+            screenY = screenY,
+            buttonState = MotionEvent.BUTTON_PRIMARY,
+            downTime = activeDownTimeMs
+        )
     }
 
     private fun dispatchMouseMotionToOverlayView(
@@ -884,8 +1035,29 @@ class PointerFocusBridge(
         buttonState: Int,
         downTime: Long,
         isGenericMotion: Boolean = false
+    ) {
+        dispatchMouseMotionToWindow(
+            window = registration.window,
+            winBounds = registration.screenBoundsProvider(),
+            action = action,
+            screenX = screenX,
+            screenY = screenY,
+            buttonState = buttonState,
+            downTime = downTime,
+            isGenericMotion = isGenericMotion
+        )
+    }
+
+    private fun dispatchMouseMotionToWindow(
+        window: Window,
+        winBounds: Rect,
+        action: Int,
+        screenX: Float,
+        screenY: Float,
+        buttonState: Int,
+        downTime: Long,
+        isGenericMotion: Boolean = false
     ) = synchronized(dispatchLock) {
-        val winBounds = registration.screenBoundsProvider()
         val localX = (screenX - winBounds.left).coerceAtLeast(0f)
         val localY = (screenY - winBounds.top).coerceAtLeast(0f)
         val eventTime = SystemClock.uptimeMillis()
@@ -918,9 +1090,9 @@ class PointerFocusBridge(
 
         try {
             if (isGenericMotion) {
-                registration.window.superDispatchGenericMotionEvent(event)
+                window.superDispatchGenericMotionEvent(event)
             } else {
-                registration.window.superDispatchTouchEvent(event)
+                window.superDispatchTouchEvent(event)
             }
         } finally {
             event.recycle()
@@ -933,8 +1105,25 @@ class PointerFocusBridge(
         screenY: Float,
         vScroll: Float,
         hScroll: Float
+    ) {
+        dispatchMouseScrollToWindow(
+            window = registration.window,
+            winBounds = registration.screenBoundsProvider(),
+            screenX = screenX,
+            screenY = screenY,
+            vScroll = vScroll,
+            hScroll = hScroll
+        )
+    }
+
+    private fun dispatchMouseScrollToWindow(
+        window: Window,
+        winBounds: Rect,
+        screenX: Float,
+        screenY: Float,
+        vScroll: Float,
+        hScroll: Float
     ) = synchronized(dispatchLock) {
-        val winBounds = registration.screenBoundsProvider()
         val now = SystemClock.uptimeMillis()
 
         reusablePointerCoords[0].apply {
@@ -963,7 +1152,7 @@ class PointerFocusBridge(
         )
 
         try {
-            registration.window.superDispatchGenericMotionEvent(event)
+            window.superDispatchGenericMotionEvent(event)
         } finally {
             event.recycle()
         }
@@ -975,6 +1164,17 @@ class PointerFocusBridge(
 
         fun isInBottomEdgeRevealZone(screenY: Float, displayHeightPx: Int): Boolean {
             return displayHeightPx > 0 && screenY >= (displayHeightPx - BOTTOM_EDGE_REVEAL_THRESHOLD_PX)
+        }
+
+        fun shouldAllowBackdropHitTesting(
+            shellSurfaceMode: ShellSurfaceMode,
+            isShowDesktopActive: Boolean,
+            hasUnminimizedWindows: Boolean,
+            hasExternalAppVisible: Boolean
+        ): Boolean {
+            if (shellSurfaceMode == ShellSurfaceMode.DOCKED_TASKBAR) return false
+            if (!isShowDesktopActive && (hasUnminimizedWindows || hasExternalAppVisible)) return false
+            return true
         }
     }
 }

@@ -245,7 +245,7 @@ class WindowTitlebarOverlayController(
                                 beginInteractiveMove(activeModel)
                             },
                             onDragMoveDelta = { dx, dy, localPointerX, localPointerY ->
-                                stepInteractiveMove(dx, dy, localPointerX, localPointerY)
+                                stepInteractiveMove(activeModel, dx, dy, localPointerX, localPointerY)
                             },
                             onDragMoveEnd = {
                                 finishInteractiveMove(activeModel)
@@ -540,10 +540,19 @@ class WindowTitlebarOverlayController(
         dragAccumDy = 0f
     }
 
-    private fun stepInteractiveMove(dx: Float, dy: Float, localPointerX: Float, localPointerY: Float) {
+    private fun stepInteractiveMove(
+        model: TitlebarRenderModel,
+        dx: Float,
+        dy: Float,
+        localPointerX: Float,
+        localPointerY: Float
+    ) {
         val view = composeView ?: return
         val lp = layoutParams ?: return
         val displayInfo = sessionRepository.activeDisplay.value ?: return
+
+        val prevLpX = lp.x
+        val prevLpY = lp.y
 
         dragAccumDx += dx
         dragAccumDy += dy
@@ -561,9 +570,14 @@ class WindowTitlebarOverlayController(
             updateHostWindowLayout(view, nextLeft, nextTop, curW, curH)
         }
 
-        val pointerScreenX = (nextLeft + localPointerX).coerceIn(0f, (displayInfo.widthPx - 1).toFloat())
-        val pointerScreenY = (nextTop + localPointerY).coerceIn(0f, (displayInfo.heightPx - 1).toFloat())
-        snappingController.onPointerDragMoved(pointerScreenX, pointerScreenY, displayInfo)
+        val pointerScreenX = (prevLpX + localPointerX).coerceIn(0f, (displayInfo.widthPx - 1).toFloat())
+        val pointerScreenY = (prevLpY + localPointerY).coerceIn(0f, (displayInfo.heightPx - 1).toFloat())
+        snappingController.onPointerDragMoved(
+            x = pointerScreenX,
+            y = pointerScreenY,
+            displayInfo = displayInfo,
+            targetPackageOverride = model.packageName
+        )
     }
 
     private fun finishInteractiveMove(model: TitlebarRenderModel) {
@@ -571,6 +585,7 @@ class WindowTitlebarOverlayController(
         if (snappingController.commitSnapOnDrop(appLauncher)) {
             return
         }
+        snappingController.clearPreview()
         val movedDx = dragAccumDx.roundToInt()
         val movedDy = dragAccumDy.roundToInt()
         if (abs(movedDx) < 3 && abs(movedDy) < 3) {

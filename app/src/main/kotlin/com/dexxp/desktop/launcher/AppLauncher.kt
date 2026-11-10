@@ -4,6 +4,7 @@ import android.app.ActivityOptions
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.LauncherApps
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
@@ -72,6 +73,31 @@ class AppLauncher(
             return requestedSnapMode
         }
         val policy = sessionRepository.getAppWindowPolicy(packageName)
+        if (policy == AppWindowLaunchPolicy.AUTO) {
+            val saved = sessionRepository.getSavedWindowIntBounds(packageName)
+            if (saved != null) {
+                val displayInfo = sessionRepository.activeDisplay.value
+                val width = displayInfo?.widthPx ?: 1920
+                val height = displayInfo?.heightPx ?: 1080
+                val density = (displayInfo?.scaledDensityDpi ?: 160) / 160f
+                val taskbarPx = (TASKBAR_HEIGHT_DP * density).roundToInt()
+                val marginPx = (WindowSnappingController.SNAP_MARGIN_DP * density).roundToInt()
+                val topHeadroomPx = maxOf(
+                    marginPx,
+                    (WindowSnappingController.FLOATING_TOP_HEADROOM_DP * density).roundToInt()
+                )
+                if (DesktopSessionRepository.fitPersistedBoundsToDisplay(
+                        saved = saved,
+                        displayWidthPx = width,
+                        displayHeightPx = height,
+                        taskbarHeightPx = taskbarPx,
+                        topHeadroomPx = topHeadroomPx
+                    ) != null
+                ) {
+                    return WindowSnapMode.FREEFORM_CASCADED
+                }
+            }
+        }
         return resolvePolicySnapMode(
             policy = policy,
             isPortraitLocked = app?.isPortraitLocked == true
@@ -621,8 +647,81 @@ class AppLauncher(
         val clamped = Rect(clampedLeft, clampedTop, clampedLeft + clampedW, clampedTop + clampedH)
 
         rememberedBounds[packageName] = Rect(clamped)
+        sessionRepository.saveWindowBounds(packageName, clamped)
         sessionRepository.updateWindowBoundsAndSnap(packageName, clamped, snapMode)
         return launchPackageWithExactBounds(packageName, clamped, snapMode, launchContext)
+    }
+
+    /**
+     * Launches a 1-click dynamic or manifest jump-list shortcut ([DesktopAppShortcut]) onto the
+     * active secondary display using freeform/container bounds when applicable.
+     */
+    fun launchAppShortcut(
+        shortcut: DesktopAppShortcut,
+        launchContext: Context? = null
+    ): Boolean {
+        val packageName = shortcut.packageName
+        val isTv = sessionRepository.environmentMode.value == DesktopEnvironmentMode.TV_LEANBACK
+        val displayInfo = sessionRepository.activeDisplay.value
+        val targetDisplayId = displayInfo?.displayId ?: Display.DEFAULT_DISPLAY
+        val catalogItem = appRepository.findByPackage(packageName)
+        val effectiveSnap = resolveEffectiveSnapMode(catalogItem, packageName, null)
+        val useFreeform = !isTv && effectiveSnap.usesFreeformContainer
+        val bounds = if (useFreeform) {
+            computeWindowBounds(packageName, displayInfo, effectiveSnap)
+        } else {
+            Rect(0, 0, displayInfo?.widthPx ?: 1920, displayInfo?.heightPx ?: 1080)
+        }
+        val optionsBundle = buildLaunchActivityOptions(
+            targetDisplayId = targetDisplayId,
+            isTvMode = isTv,
+            launchBounds = if (useFreeform) bounds else null,
+            useFreeformWindowing = useFreeform
+        )
+
+        val dispatcher = launchContext ?: appContext
+        val launchedViaShortcutInfo = shortcut.shortcutInfo?.let { info ->
+            val launcherApps = dispatcher.getSystemService(LauncherApps::class.java)
+            if (launcherApps != null) {
+                runCatching {
+                    launcherApps.startShortcut(info, null, optionsBundle)
+                    true
+                }.getOrDefault(false)
+            } else {
+                false
+            }
+        } ?: false
+
+        val launched = if (launchedViaShortcutInfo) {
+            true
+        } else if (shortcut.fallbackIntent != null) {
+            val intentCopy = Intent(shortcut.fallbackIntent).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            dispatchActivityIntent(
+                context = dispatcher,
+                intent = intentCopy,
+                optionsBundle = optionsBundle,
+                targetDisplayId = targetDisplayId,
+                targetPackage = packageName
+            )
+        } else {
+            false
+        }
+
+        if (launched) {
+            sessionRepository.dismissFlyouts()
+            sessionRepository.recordWindowLaunched(
+                packageName = packageName,
+                activityName = catalogItem?.activityName.orEmpty(),
+                label = catalogItem?.label ?: packageName.substringAfterLast('.'),
+                bounds = bounds,
+                snapMode = if (isTv) WindowSnapMode.MAXIMIZED else effectiveSnap,
+                displayId = targetDisplayId
+            )
+            return true
+        }
+        return launchOrFocusPackage(packageName, null, launchContext)
     }
 
     /**
@@ -836,12 +935,27 @@ class AppLauncher(
         val density = dpi / 160f
         val taskbarPx = (TASKBAR_HEIGHT_DP * density).roundToInt()
         val marginPx = (WindowSnappingController.SNAP_MARGIN_DP * density).roundToInt()
-        val titlebarAllowancePx = (32 * density).roundToInt()
+        val topHeadroomPx = maxOf(
+            marginPx,
+            (WindowSnappingController.FLOATING_TOP_HEADROOM_DP * density).roundToInt()
+        )
+        val titlebarAllowancePx = maxOf((32 * density).roundToInt(), topHeadroomPx)
         val usableHeight = (height - taskbarPx).coerceAtLeast(360)
 
-        rememberedBounds[packageName]?.let { saved ->
-            if (saved.width() in 320..width && saved.bottom <= usableHeight) {
-                return Rect(saved)
+        val candidateSaved = sessionRepository.getSavedWindowIntBounds(packageName)
+            ?: rememberedBounds[packageName]?.let {
+                WindowSnappingController.IntBounds(it.left, it.top, it.right, it.bottom)
+            }
+        if (candidateSaved != null) {
+            val fitted = DesktopSessionRepository.fitPersistedBoundsToDisplay(
+                saved = candidateSaved,
+                displayWidthPx = width,
+                displayHeightPx = height,
+                taskbarHeightPx = taskbarPx,
+                topHeadroomPx = topHeadroomPx
+            )
+            if (fitted != null) {
+                return Rect(fitted.left, fitted.top, fitted.right, fitted.bottom)
             }
         }
 

@@ -14,6 +14,8 @@ import android.view.MotionEvent
 import android.view.Window
 import android.view.WindowManager
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.ViewCompositionStrategy
@@ -58,6 +60,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -90,7 +93,7 @@ class DesktopWindowPresentation(
     private val missionControlController: MissionControlOverviewController,
     private val phoneHubController: PhoneHubController,
     private val keyboardManager: DesktopKeyboardManager,
-    private val hasHardwareCursorOverlay: () -> Boolean
+    private val cursorOverlayAttachedFlow: StateFlow<Boolean>
 ) : Presentation(scaledDisplayContext, display, R.style.Theme_DexXP_Presentation),
     LifecycleOwner,
     ViewModelStoreOwner,
@@ -137,6 +140,7 @@ class DesktopWindowPresentation(
             setViewTreeSavedStateRegistryOwner(this@DesktopWindowPresentation)
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             setContent {
+                val hasTopLevelCursorOverlay by cursorOverlayAttachedFlow.collectAsState()
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                     DexXPTheme(allowDynamicColorOnPhone = false) {
                         DesktopWorkspaceRoot(
@@ -156,7 +160,7 @@ class DesktopWindowPresentation(
                             missionControlController = missionControlController,
                             phoneHubController = phoneHubController,
                             keyboardManager = keyboardManager,
-                            renderInlineCursorFallback = !hasHardwareCursorOverlay(),
+                            renderInlineCursorFallback = !hasTopLevelCursorOverlay,
                             isBackdropOnly = false
                         )
                     }

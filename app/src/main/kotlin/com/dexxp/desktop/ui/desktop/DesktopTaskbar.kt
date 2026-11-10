@@ -66,6 +66,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.dexxp.desktop.launcher.AppLauncher
+import com.dexxp.desktop.launcher.AppShortcutHelper
+import com.dexxp.desktop.launcher.DesktopAppShortcut
 import com.dexxp.desktop.model.CallPhase
 import com.dexxp.desktop.model.DesktopAppItem
 import com.dexxp.desktop.model.DesktopDpiScale
@@ -78,7 +80,9 @@ import com.dexxp.desktop.model.WindowSnapMode
 import com.dexxp.desktop.ui.icons.DesktopIcons
 import com.dexxp.desktop.ui.theme.StatusGreen
 import com.dexxp.desktop.workspace.TaskbarWorkspaceChip
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -92,6 +96,7 @@ internal fun DesktopTaskbar(
     runningWindows: List<RunningWindowRecord>,
     activeWorkspace: VirtualWorkspace,
     notificationCount: Int,
+    packagesWithNotifications: Set<String> = emptySet(),
     incomingCall: IncomingCallState?,
     detectedOtp: DetectedOtpCode?,
     isStartMenuOpen: Boolean,
@@ -129,6 +134,7 @@ internal fun DesktopTaskbar(
     onMinimizePackage: (String) -> Unit,
     onCloseWindow: (String) -> Unit,
     onTogglePin: (String) -> Unit,
+    onLaunchShortcut: (DesktopAppShortcut) -> Unit = {},
     onOpenAppInfo: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -139,7 +145,13 @@ internal fun DesktopTaskbar(
         }
     }
 
-    val dockEntries by remember(appsByPkg, pinnedPackages, runningWindows, isShowDesktopActive) {
+    val dockEntries by remember(
+        appsByPkg,
+        pinnedPackages,
+        runningWindows,
+        isShowDesktopActive,
+        packagesWithNotifications
+    ) {
         derivedStateOf {
             val runningByPkg = runningWindows.associateBy { it.packageName }
             val orderedPackages = LinkedHashSet<String>().apply {
@@ -159,7 +171,11 @@ internal fun DesktopTaskbar(
                         isRunning = running != null,
                         isFocused = !isShowDesktopActive && running?.isFocused == true && !running.isMinimized,
                         isMinimized = running?.isMinimized == true,
-                        isPinned = pkg in pinnedPackages
+                        isPinned = pkg in pinnedPackages,
+                        hasPendingNotification = hasPendingNotificationForDockPackage(
+                            packageName = pkg,
+                            activeNotificationPackages = packagesWithNotifications
+                        )
                     )
                 }
             }
@@ -320,6 +336,7 @@ internal fun DesktopTaskbar(
                                 }
                             },
                             onSnap = { snap -> onActivatePackage(entry.packageName, snap) },
+                            onLaunchShortcut = onLaunchShortcut,
                             onMinimize = { onMinimizePackage(entry.packageName) },
                             onTogglePin = { onTogglePin(entry.packageName) },
                             onOpenAppInfo = { onOpenAppInfo(entry.packageName) },
@@ -686,6 +703,21 @@ private fun TaskbarUtilityIconButton(
     }
 }
 
+internal fun hasPendingNotificationForDockPackage(
+    packageName: String,
+    activeNotificationPackages: Set<String>
+): Boolean {
+    if (activeNotificationPackages.isEmpty()) return false
+    if (packageName in activeNotificationPackages) return true
+    return when (packageName) {
+        "dexxp.webapp.whatsapp_web" ->
+            "com.whatsapp" in activeNotificationPackages || "com.whatsapp.w4b" in activeNotificationPackages
+        "dexxp.webapp.gmail_web" -> "com.google.android.gm" in activeNotificationPackages
+        "dexxp.webapp.youtube_desktop" -> "com.google.android.youtube" in activeNotificationPackages
+        else -> false
+    }
+}
+
 private data class DockAppEntry(
     val packageName: String,
     val label: String,
@@ -693,7 +725,8 @@ private data class DockAppEntry(
     val isRunning: Boolean,
     val isFocused: Boolean,
     val isMinimized: Boolean,
-    val isPinned: Boolean
+    val isPinned: Boolean,
+    val hasPendingNotification: Boolean = false
 )
 
 private val TaskbarPillShape = RoundedCornerShape(12.dp)
@@ -706,14 +739,25 @@ private fun TaskbarAppButton(
     entry: DockAppEntry,
     onClick: () -> Unit,
     onSnap: (WindowSnapMode?) -> Unit,
+    onLaunchShortcut: (DesktopAppShortcut) -> Unit,
     onMinimize: () -> Unit,
     onTogglePin: () -> Unit,
     onOpenAppInfo: () -> Unit,
     onCloseRecord: () -> Unit
 ) {
+    val context = LocalContext.current
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
     var menuOpen by remember { mutableStateOf(false) }
+    var appShortcuts by remember(entry.packageName) { mutableStateOf<List<DesktopAppShortcut>>(emptyList()) }
+
+    LaunchedEffect(menuOpen, entry.packageName) {
+        if (menuOpen) {
+            appShortcuts = withContext(Dispatchers.IO) {
+                AppShortcutHelper.getShortcutsForPackage(context, entry.packageName)
+            }
+        }
+    }
 
     val scale by animateFloatAsState(
         targetValue = when {
@@ -783,28 +827,46 @@ private fun TaskbarAppButton(
                 },
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (entry.iconBitmap != null) {
-                    Image(
-                        bitmap = entry.iconBitmap,
-                        contentDescription = entry.label,
-                        modifier = Modifier
-                            .size(24.dp)
-                            .graphicsLayer { alpha = iconAlpha }
-                            .clip(TaskbarIconClipShape)
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(24.dp)
-                            .graphicsLayer { alpha = iconAlpha }
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primaryContainer),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = entry.label.take(1).uppercase(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                Box(
+                    modifier = Modifier.size(28.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (entry.iconBitmap != null) {
+                        Image(
+                            bitmap = entry.iconBitmap,
+                            contentDescription = entry.label,
+                            modifier = Modifier
+                                .size(24.dp)
+                                .graphicsLayer { alpha = iconAlpha }
+                                .clip(TaskbarIconClipShape)
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .graphicsLayer { alpha = iconAlpha }
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = entry.label.take(1).uppercase(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+
+                    if (entry.hasPendingNotification) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .size(9.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceContainer)
+                                .padding(1.5.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary)
                         )
                     }
                 }
@@ -904,6 +966,33 @@ private fun TaskbarAppButton(
                         onClick = { menuOpen = false; onMinimize() }
                     )
                 }
+            }
+            if (appShortcuts.isNotEmpty()) {
+                HorizontalDivider()
+                appShortcuts.forEach { shortcut ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = shortcut.label,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = DesktopIcons.ArrowRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        onClick = {
+                            menuOpen = false
+                            onLaunchShortcut(shortcut)
+                        }
+                    )
+                }
+                HorizontalDivider()
             }
             DropdownMenuItem(
                 text = { Text(if (entry.isPinned) "Unpin from Taskbar" else "Pin to Taskbar") },

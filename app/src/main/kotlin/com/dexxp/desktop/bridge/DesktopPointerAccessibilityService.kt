@@ -295,9 +295,18 @@ class DesktopPointerAccessibilityService : AccessibilityService() {
         displayId: Int,
         x: Float,
         y: Float,
-        durationMs: Long = 48L
+        durationMs: Long = 40L
     ): Boolean {
-        val path = Path().apply { moveTo(x.coerceAtLeast(1f), y.coerceAtLeast(1f)) }
+        val app = applicationContext as? DexXpApplication
+        val display = app?.sessionRepository?.activeDisplay?.value
+        val maxW = ((display?.widthPx ?: 1920) - 2).coerceAtLeast(2).toFloat()
+        val maxH = ((display?.heightPx ?: 1080) - 2).coerceAtLeast(2).toFloat()
+        val safeX = x.coerceIn(1f, maxW)
+        val safeY = y.coerceIn(1f, maxH)
+        val path = Path().apply {
+            moveTo(safeX, safeY)
+            lineTo(safeX, safeY)
+        }
         val stroke = GestureDescription.StrokeDescription(
             path,
             0L,
@@ -319,9 +328,13 @@ class DesktopPointerAccessibilityService : AccessibilityService() {
         durationMs: Long = 220L
     ): Boolean {
         if (hypot(endX - startX, endY - startY) < 2f) return false
+        val app = applicationContext as? DexXpApplication
+        val display = app?.sessionRepository?.activeDisplay?.value
+        val maxW = ((display?.widthPx ?: 1920) - 2).coerceAtLeast(2).toFloat()
+        val maxH = ((display?.heightPx ?: 1080) - 2).coerceAtLeast(2).toFloat()
         val path = Path().apply {
-            moveTo(startX.coerceAtLeast(1f), startY.coerceAtLeast(1f))
-            lineTo(endX.coerceAtLeast(1f), endY.coerceAtLeast(1f))
+            moveTo(startX.coerceIn(1f, maxW), startY.coerceIn(1f, maxH))
+            lineTo(endX.coerceIn(1f, maxW), endY.coerceIn(1f, maxH))
         }
         val stroke = GestureDescription.StrokeDescription(
             path,

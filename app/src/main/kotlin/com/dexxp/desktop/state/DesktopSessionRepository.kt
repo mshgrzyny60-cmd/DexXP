@@ -19,6 +19,7 @@ import com.dexxp.desktop.model.TvNavigationAction
 import com.dexxp.desktop.model.WallpaperPreset
 import com.dexxp.desktop.model.WindowSnapMode
 import com.dexxp.desktop.system.SystemFlagsInspector
+import com.dexxp.desktop.windowing.WindowSnappingController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -159,6 +160,10 @@ class DesktopSessionRepository(context: Context) {
 
     private val _appWindowPolicies = MutableStateFlow(loadSavedAppWindowPolicies())
     val appWindowPolicies: StateFlow<Map<String, AppWindowLaunchPolicy>> = _appWindowPolicies.asStateFlow()
+
+    private val savedWindowBounds = ConcurrentHashMap<String, WindowSnappingController.IntBounds>(
+        loadSavedWindowBounds()
+    )
 
     private val _systemReadiness = MutableStateFlow(SystemFlagsInspector.inspect(appContext))
     val systemReadiness: StateFlow<SystemReadinessStatus> = _systemReadiness.asStateFlow()
@@ -839,6 +844,33 @@ class DesktopSessionRepository(context: Context) {
         }
     }
 
+    fun getSavedWindowIntBounds(packageName: String): WindowSnappingController.IntBounds? {
+        return savedWindowBounds[packageName]
+    }
+
+    fun getSavedWindowBounds(packageName: String): Rect? {
+        val b = savedWindowBounds[packageName] ?: return null
+        return Rect(b.left, b.top, b.right, b.bottom)
+    }
+
+    fun saveWindowBounds(packageName: String, bounds: Rect) {
+        if (packageName.isBlank()) return
+        val intBounds = WindowSnappingController.IntBounds(
+            left = bounds.left,
+            top = bounds.top,
+            right = bounds.right,
+            bottom = bounds.bottom
+        )
+        if (intBounds.width < MIN_PERSISTED_WINDOW_WIDTH_PX ||
+            intBounds.height < MIN_PERSISTED_WINDOW_HEIGHT_PX
+        ) {
+            return
+        }
+        savedWindowBounds[packageName] = intBounds
+        val encoded = encodePersistedWindowBounds(savedWindowBounds)
+        prefs.edit().putStringSet(KEY_SAVED_WINDOW_BOUNDS, encoded).apply()
+    }
+
     fun updateWindowBoundsAndSnap(
         packageName: String,
         bounds: Rect,
@@ -913,6 +945,11 @@ class DesktopSessionRepository(context: Context) {
             }
         }
         return out
+    }
+
+    private fun loadSavedWindowBounds(): Map<String, WindowSnappingController.IntBounds> {
+        val raw = prefs.getStringSet(KEY_SAVED_WINDOW_BOUNDS, emptySet()) ?: emptySet()
+        return decodePersistedWindowBounds(raw)
     }
 
     fun shutdown() {
@@ -1023,6 +1060,70 @@ class DesktopSessionRepository(context: Context) {
     companion object {
         const val LAUNCH_GRACE_PERIOD_MS = 2500L
         const val REQUIRED_CONSECUTIVE_MISSES = 2
+        const val MIN_PERSISTED_WINDOW_WIDTH_PX = 320
+        const val MIN_PERSISTED_WINDOW_HEIGHT_PX = 280
+
+        fun encodePersistedWindowBounds(
+            boundsByPackage: Map<String, WindowSnappingController.IntBounds>
+        ): Set<String> {
+            if (boundsByPackage.isEmpty()) return emptySet()
+            val out = LinkedHashSet<String>(boundsByPackage.size)
+            for ((pkg, b) in boundsByPackage) {
+                if (pkg.isBlank() ||
+                    b.width < MIN_PERSISTED_WINDOW_WIDTH_PX ||
+                    b.height < MIN_PERSISTED_WINDOW_HEIGHT_PX
+                ) {
+                    continue
+                }
+                out.add("$pkg=${b.left},${b.top},${b.right},${b.bottom}")
+            }
+            return out
+        }
+
+        fun decodePersistedWindowBounds(
+            entries: Set<String>
+        ): Map<String, WindowSnappingController.IntBounds> {
+            if (entries.isEmpty()) return emptyMap()
+            val out = HashMap<String, WindowSnappingController.IntBounds>(entries.size)
+            for (entry in entries) {
+                val eqIdx = entry.indexOf('=')
+                if (eqIdx <= 0 || eqIdx >= entry.length - 1) continue
+                val pkg = entry.substring(0, eqIdx).trim()
+                if (pkg.isEmpty()) continue
+                val coords = entry.substring(eqIdx + 1).split(',')
+                if (coords.size != 4) continue
+                val left = coords[0].trim().toIntOrNull() ?: continue
+                val top = coords[1].trim().toIntOrNull() ?: continue
+                val right = coords[2].trim().toIntOrNull() ?: continue
+                val bottom = coords[3].trim().toIntOrNull() ?: continue
+                val bounds = WindowSnappingController.IntBounds(left, top, right, bottom)
+                if (bounds.width >= MIN_PERSISTED_WINDOW_WIDTH_PX &&
+                    bounds.height >= MIN_PERSISTED_WINDOW_HEIGHT_PX
+                ) {
+                    out[pkg] = bounds
+                }
+            }
+            return out
+        }
+
+        fun fitPersistedBoundsToDisplay(
+            saved: WindowSnappingController.IntBounds,
+            displayWidthPx: Int,
+            displayHeightPx: Int,
+            taskbarHeightPx: Int,
+            topHeadroomPx: Int
+        ): WindowSnappingController.IntBounds? {
+            if (displayWidthPx <= 0 || displayHeightPx <= 0) return null
+            val usableHeight = (displayHeightPx - taskbarHeightPx).coerceAtLeast(360)
+            if (saved.width < MIN_PERSISTED_WINDOW_WIDTH_PX ||
+                saved.height < MIN_PERSISTED_WINDOW_HEIGHT_PX
+            ) {
+                return null
+            }
+            val fitsHorizontally = saved.left >= 0 && saved.right <= displayWidthPx
+            val fitsVertically = saved.top >= topHeadroomPx && saved.bottom <= usableHeight
+            return if (fitsHorizontally && fitsVertically) saved else null
+        }
 
         fun isTimestampWithinGracePeriod(
             launchEpochMs: Long,
@@ -1079,6 +1180,7 @@ class DesktopSessionRepository(context: Context) {
         private const val KEY_EXTERNAL_BRIGHTNESS = "external_brightness"
         private const val KEY_CUSTOM_DESKTOP_URI = "custom_desktop_tree_uri"
         private const val KEY_APP_WINDOW_POLICIES = "app_window_policies"
+        private const val KEY_SAVED_WINDOW_BOUNDS = "saved_window_bounds"
 
         private val DEFAULT_PINNED = setOf(
             "com.android.chrome",

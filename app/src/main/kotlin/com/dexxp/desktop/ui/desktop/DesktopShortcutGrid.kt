@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.dexxp.desktop.files.DesktopFileManager
 import com.dexxp.desktop.files.DesktopFileTile
+import com.dexxp.desktop.launcher.DesktopAppShortcut
 import com.dexxp.desktop.model.AppWindowLaunchPolicy
 import com.dexxp.desktop.model.DesktopAppItem
 import com.dexxp.desktop.model.DesktopFileItem
@@ -73,6 +74,7 @@ internal fun DesktopShortcutAndFileGrid(
     onTogglePinTaskbar: (String) -> Unit,
     onToggleDesktopShortcut: (String) -> Unit,
     onChangeWindowPolicy: (String, AppWindowLaunchPolicy) -> Unit = { _, _ -> },
+    onLaunchShortcut: (DesktopAppShortcut) -> Unit = {},
     onOpenAppInfo: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -172,6 +174,7 @@ internal fun DesktopShortcutAndFileGrid(
 
                 AppLaunchContextMenu(
                     expanded = contextMenuOpen,
+                    packageName = app.packageName,
                     isPinnedTaskbar = app.packageName in pinnedPackages,
                     isOnDesktop = app.packageName in desktopShortcutPackages,
                     currentPolicy = policy,
@@ -179,6 +182,10 @@ internal fun DesktopShortcutAndFileGrid(
                     onSelectSnapMode = { snap, multi ->
                         contextMenuOpen = false
                         onLaunchApp(app, snap, multi)
+                    },
+                    onLaunchShortcut = { shortcut ->
+                        contextMenuOpen = false
+                        onLaunchShortcut(shortcut)
                     },
                     onTogglePinTaskbar = {
                         contextMenuOpen = false

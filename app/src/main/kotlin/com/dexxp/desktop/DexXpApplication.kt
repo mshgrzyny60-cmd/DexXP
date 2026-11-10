@@ -91,7 +91,11 @@ class DexXpApplication : Application() {
 
         audioRouteManager = AudioRouteManager(this)
         desktopFileManager = DesktopFileManager(this, sessionRepository)
-        phoneScreenPowerController = PhoneScreenPowerController(this, sessionRepository)
+        phoneScreenPowerController = PhoneScreenPowerController(
+            context = this,
+            sessionRepository = sessionRepository,
+            pointerFocusBridge = pointerFocusBridge
+        )
         clipboardManager = DesktopClipboardManager(this, sessionRepository, pointerFocusBridge)
         virtualWorkspaceManager = VirtualWorkspaceManager(this, sessionRepository, appLauncher)
         desktopBrowserLauncher = DesktopBrowserLauncher(

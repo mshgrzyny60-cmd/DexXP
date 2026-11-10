@@ -29,6 +29,8 @@ import kotlinx.coroutines.launch
  */
 class MainActivity : ComponentActivity() {
 
+    private var consumingBlackoutWakeGesture: Boolean = false
+
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) {
@@ -117,8 +119,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        val app = application as DexXpApplication
         if (event.isFromSource(InputDevice.SOURCE_MOUSE)) {
-            val app = application as DexXpApplication
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN,
                 MotionEvent.ACTION_MOVE -> {
@@ -128,6 +130,19 @@ class MainActivity : ComponentActivity() {
                 MotionEvent.ACTION_CANCEL -> {
                     app.pointerFocusBridge.setPointerPosition(event.x, event.y, isDown = false, sourceDisplayId = display?.displayId)
                 }
+            }
+        } else if (event.isFromSource(InputDevice.SOURCE_TOUCHSCREEN)) {
+            val action = event.actionMasked
+            val wokeOnFirstContact = app.phoneScreenPowerController.onPhonePhysicalTouch(action)
+            if (wokeOnFirstContact) {
+                consumingBlackoutWakeGesture = true
+                return true
+            }
+            if (consumingBlackoutWakeGesture) {
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    consumingBlackoutWakeGesture = false
+                }
+                return true
             }
         }
         return super.dispatchTouchEvent(event)

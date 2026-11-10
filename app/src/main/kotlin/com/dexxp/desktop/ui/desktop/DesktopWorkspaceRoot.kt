@@ -143,6 +143,12 @@ fun DesktopWorkspaceRoot(
         }
     }
 
+    val packagesWithNotifications by remember(notifications) {
+        derivedStateOf {
+            notifications.mapTo(HashSet()) { it.packageName }
+        }
+    }
+
     if (isBackdropOnly) {
         Box(modifier = Modifier.fillMaxSize()) {
             DesktopWallpaperCanvas(
@@ -168,6 +174,7 @@ fun DesktopWorkspaceRoot(
                 onTogglePinTaskbar = sessionRepository::toggleTaskbarPin,
                 onToggleDesktopShortcut = sessionRepository::toggleDesktopShortcut,
                 onChangeWindowPolicy = sessionRepository::setAppWindowPolicy,
+                onLaunchShortcut = { shortcut -> appLauncher.launchAppShortcut(shortcut, context) },
                 onOpenAppInfo = { pkg -> appLauncher.launchAppDetailsSettings(pkg, context) },
                 modifier = Modifier
                     .fillMaxSize()
@@ -192,6 +199,7 @@ fun DesktopWorkspaceRoot(
                     runningWindows = runningWindows,
                     activeWorkspace = activeWorkspace,
                     notificationCount = notifications.size,
+                    packagesWithNotifications = packagesWithNotifications,
                     incomingCall = incomingCallState,
                     detectedOtp = detectedOtp,
                     isStartMenuOpen = false,
@@ -236,6 +244,9 @@ fun DesktopWorkspaceRoot(
                         appLauncher.closeWindow(pkg, context)
                     },
                     onTogglePin = sessionRepository::toggleTaskbarPin,
+                    onLaunchShortcut = { shortcut ->
+                        appLauncher.launchAppShortcut(shortcut, context)
+                    },
                     onOpenAppInfo = { pkg ->
                         appLauncher.launchAppDetailsSettings(pkg, context)
                     }
@@ -290,6 +301,7 @@ fun DesktopWorkspaceRoot(
                             onTogglePinTaskbar = sessionRepository::toggleTaskbarPin,
                             onToggleDesktopShortcut = sessionRepository::toggleDesktopShortcut,
                             onChangeWindowPolicy = sessionRepository::setAppWindowPolicy,
+                            onLaunchShortcut = { shortcut -> appLauncher.launchAppShortcut(shortcut, context) },
                             onOpenAppInfo = { pkg -> appLauncher.launchAppDetailsSettings(pkg, context) },
                             modifier = Modifier.weight(1f)
                         )
@@ -372,6 +384,7 @@ fun DesktopWorkspaceRoot(
                         runningWindows = runningWindows,
                         activeWorkspace = activeWorkspace,
                         notificationCount = notifications.size,
+                        packagesWithNotifications = packagesWithNotifications,
                         incomingCall = null,
                         detectedOtp = null,
                         isStartMenuOpen = isStartMenuOpen,
@@ -415,6 +428,9 @@ fun DesktopWorkspaceRoot(
                             appLauncher.closeWindow(pkg, context)
                         },
                         onTogglePin = sessionRepository::toggleTaskbarPin,
+                        onLaunchShortcut = { shortcut ->
+                            appLauncher.launchAppShortcut(shortcut, context)
+                        },
                         onOpenAppInfo = { pkg ->
                             sessionRepository.dismissFlyouts()
                             appLauncher.launchAppDetailsSettings(pkg, context)
@@ -435,8 +451,10 @@ fun DesktopWorkspaceRoot(
                     )
                 }
 
-                // Leaf-isolated zero-recomposition hardware-accelerated cursor
-                InlineDesktopCursorOverlay(pointerFocusBridge = pointerFocusBridge)
+                // Leaf-isolated zero-recomposition hardware-accelerated cursor fallback (only when top-level HUD overlay is unattached)
+                if (renderInlineCursorFallback) {
+                    InlineDesktopCursorOverlay(pointerFocusBridge = pointerFocusBridge)
+                }
             }
         }
     }

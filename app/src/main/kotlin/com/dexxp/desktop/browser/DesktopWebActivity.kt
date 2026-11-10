@@ -409,6 +409,18 @@ class DesktopWebActivity : ComponentActivity() {
             return !activity.isFinishing && !activity.isDestroyed
         }
 
+        fun resolveActiveWindowForPointer(recordKey: String, outScreenBounds: android.graphics.Rect): android.view.Window? {
+            val activity = activeInstances[recordKey]?.get() ?: return null
+            if (activity.isFinishing || activity.isDestroyed) return null
+            val win = activity.window ?: return null
+            val decor = win.peekDecorView() ?: return null
+            if (!decor.isAttachedToWindow || decor.visibility != View.VISIBLE) return null
+            val loc = IntArray(2)
+            decor.getLocationOnScreen(loc)
+            outScreenBounds.set(loc[0], loc[1], loc[0] + decor.width, loc[1] + decor.height)
+            return win
+        }
+
         fun injectWindowsDesktopPlatformSpoof(webView: WebView?) {
             webView?.evaluateJavascript(PLATFORM_SPOOF_JS, null)
         }

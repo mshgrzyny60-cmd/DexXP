@@ -153,6 +153,9 @@ internal fun DesktopFlyoutsLayer(
                 onTogglePinTaskbar = sessionRepository::toggleTaskbarPin,
                 onToggleDesktopShortcut = sessionRepository::toggleDesktopShortcut,
                 onChangeWindowPolicy = sessionRepository::setAppWindowPolicy,
+                onLaunchShortcut = { shortcut ->
+                    appLauncher.launchAppShortcut(shortcut, context)
+                },
                 onOpenAppInfo = { pkg ->
                     sessionRepository.dismissFlyouts()
                     appLauncher.launchAppDetailsSettings(pkg, context)

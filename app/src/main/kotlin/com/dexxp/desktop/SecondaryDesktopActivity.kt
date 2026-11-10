@@ -13,10 +13,13 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
 import com.dexxp.desktop.bridge.DesktopPointerAccessibilityService
+import com.dexxp.desktop.model.ShellSurfaceMode
 import com.dexxp.desktop.service.DisplayRouterService
 import com.dexxp.desktop.ui.desktop.DesktopWorkspaceRoot
 import com.dexxp.desktop.ui.theme.DexXPTheme
+import kotlinx.coroutines.launch
 
 /**
  * Layer-2 `CATEGORY_SECONDARY_HOME` Activity hosted at the root of an external display's
@@ -76,6 +79,15 @@ class SecondaryDesktopActivity : ComponentActivity() {
         applyStickyImmersiveSystemBars()
 
         val app = application as DexXpApplication
+        lifecycleScope.launch {
+            app.sessionRepository.shellSurfaceMode.collect { mode ->
+                if (mode == ShellSurfaceMode.DOCKED_TASKBAR && !isFinishing && !isDestroyed) {
+                    wasStoppedBehindExternalApp = true
+                    runCatching { moveTaskToBack(true) }
+                }
+            }
+        }
+
         setContent {
             DexXPTheme(allowDynamicColorOnPhone = false) {
                 DesktopWorkspaceRoot(
@@ -129,6 +141,13 @@ class SecondaryDesktopActivity : ComponentActivity() {
         super.onResume()
         applyStickyImmersiveSystemBars()
         val app = application as DexXpApplication
+        if (app.sessionRepository.shellSurfaceMode.value == ShellSurfaceMode.DOCKED_TASKBAR &&
+            app.sessionRepository.isWithinLaunchGracePeriod()
+        ) {
+            wasStoppedBehindExternalApp = true
+            runCatching { moveTaskToBack(true) }
+            return
+        }
         if (wasStoppedBehindExternalApp) {
             wasStoppedBehindExternalApp = false
             // When Accessibility is disabled, perform two consecutive RESUMED checks separated by 250ms

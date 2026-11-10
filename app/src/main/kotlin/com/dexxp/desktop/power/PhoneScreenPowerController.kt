@@ -8,7 +8,9 @@ import android.hardware.input.InputManager
 import android.os.BatteryManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.InputDevice
+import android.view.MotionEvent
 import android.view.Window
 import android.view.WindowManager
 import androidx.compose.foundation.background
@@ -48,13 +50,23 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.dexxp.desktop.bridge.PointerFocusBridge
 import com.dexxp.desktop.model.ExternalDisplayInfo
 import com.dexxp.desktop.state.DesktopSessionRepository
 import com.dexxp.desktop.ui.icons.DesktopIcons
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.lang.ref.WeakReference
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -73,11 +85,13 @@ import kotlin.math.roundToInt
  */
 class PhoneScreenPowerController(
     context: Context,
-    private val sessionRepository: DesktopSessionRepository
+    private val sessionRepository: DesktopSessionRepository,
+    private val pointerFocusBridge: PointerFocusBridge
 ) {
     private val appContext = context.applicationContext
     private val inputManager = appContext.getSystemService(InputManager::class.java)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val powerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val _isBlackoutActive = MutableStateFlow(false)
     val isBlackoutActive: StateFlow<Boolean> = _isBlackoutActive.asStateFlow()
@@ -87,6 +101,9 @@ class PhoneScreenPowerController(
 
     @Volatile
     private var userWokeManuallyDuringSession = false
+
+    @Volatile
+    private var lastPhoneTouchElapsedMs: Long = SystemClock.elapsedRealtime()
 
     @Volatile
     private var attachedPhoneWindowRef: WeakReference<Window>? = null
@@ -118,6 +135,54 @@ class PhoneScreenPowerController(
     init {
         _externalMouseName.value = scanPhysicalMouseName()
         inputManager?.registerInputDeviceListener(inputDeviceListener, mainHandler)
+        startHardwarePointerThermalGuard()
+    }
+
+    /**
+     * Event-driven thermal & battery guard:
+     * When an external display is attached and the user is actively working with a PC/hardware
+     * mouse (`pointerState.isHardwarePointer == true`) with zero physical phone touches for
+     * >15 seconds, automatically engages AMOLED blackout to prevent thermal throttling and battery drain.
+     */
+    private fun startHardwarePointerThermalGuard() {
+        powerScope.launch {
+            combine(
+                sessionRepository.activeDisplay,
+                pointerFocusBridge.pointerState,
+                _isBlackoutActive,
+                sessionRepository.manualKeyboardRelayOpen,
+                sessionRepository.externalTextInputState
+            ) { display, pointerState, isBlackout, manualImeOpen, externalIme ->
+                val softImeOpen = manualImeOpen || externalIme.isExternalFieldFocused
+                display != null && pointerState.isHardwarePointer && !isBlackout && !softImeOpen
+            }
+                .distinctUntilChanged()
+                .collectLatest { eligibleForIdleGuard ->
+                    if (!eligibleForIdleGuard) return@collectLatest
+                    while (isActive) {
+                        val now = SystemClock.elapsedRealtime()
+                        val softImeOpen = sessionRepository.manualKeyboardRelayOpen.value ||
+                            sessionRepository.externalTextInputState.value.isExternalFieldFocused
+                        if (shouldAutoActivateThermalBlackout(
+                                hasActiveExternalDisplay = sessionRepository.activeDisplay.value != null,
+                                isAlreadyBlackout = _isBlackoutActive.value,
+                                isHardwarePointerActive = pointerFocusBridge.pointerState.value.isHardwarePointer,
+                                isSoftKeyboardRelayOpen = softImeOpen,
+                                manualToggleSuppressed = userWokeManuallyDuringSession,
+                                lastPhoneTouchElapsedMs = lastPhoneTouchElapsedMs,
+                                nowElapsedMs = now
+                            )
+                        ) {
+                            _isBlackoutActive.value = true
+                            break
+                        }
+                        val elapsedSinceTouch = (now - lastPhoneTouchElapsedMs).coerceAtLeast(0L)
+                        val remainingMs = (HARDWARE_POINTER_IDLE_BLACKOUT_MS - elapsedSinceTouch + 50L)
+                            .coerceIn(250L, HARDWARE_POINTER_IDLE_BLACKOUT_MS + 50L)
+                        delay(remainingMs)
+                    }
+                }
+        }
     }
 
     fun bindPhoneWindow(window: Window) {
@@ -149,27 +214,67 @@ class PhoneScreenPowerController(
                 mainHandler.post(releaseTask)
             }
         } else {
+            lastPhoneTouchElapsedMs = SystemClock.elapsedRealtime()
             _externalMouseName.value = scanPhysicalMouseName()
             maybeTriggerAutoBlackout()
         }
     }
 
     fun enableBlackout() {
+        userWokeManuallyManuallyReset()
         _isBlackoutActive.value = true
     }
 
+    /**
+     * Invoked synchronously from `MainActivity.dispatchTouchEvent` on physical phone screen
+     * touches (`InputDevice.SOURCE_TOUCHSCREEN`).
+     *
+     * - Resets the 15-second hardware-pointer idle timer on every touch action.
+     * - On the very first touch contact (`ACTION_DOWN` / `ACTION_POINTER_DOWN`) while AMOLED
+     *   blackout is active, immediately wakes the phone screen to 100% brightness on the current
+     *   frame and returns `true` so the wake tap does not trigger controls underneath.
+     */
+    fun onPhonePhysicalTouch(
+        actionMasked: Int,
+        nowElapsedMs: Long = SystemClock.elapsedRealtime()
+    ): Boolean {
+        lastPhoneTouchElapsedMs = nowElapsedMs
+        if (_isBlackoutActive.value && isFirstTouchContactAction(actionMasked)) {
+            _isBlackoutActive.value = false
+            attachedPhoneWindowRef?.get()?.let { phoneWindow ->
+                runCatching { applyWindowPowerPolicy(phoneWindow, isBlackout = false) }
+            }
+            return true
+        }
+        return false
+    }
+
     fun wakePhoneScreen() {
+        wakePhoneScreenInternal(fromManualToggle = false)
+    }
+
+    private fun wakePhoneScreenInternal(fromManualToggle: Boolean) {
+        lastPhoneTouchElapsedMs = SystemClock.elapsedRealtime()
         if (_isBlackoutActive.value) {
-            if (_externalMouseName.value != null) {
+            if (fromManualToggle) {
                 userWokeManuallyDuringSession = true
             }
             _isBlackoutActive.value = false
+            attachedPhoneWindowRef?.get()?.let { phoneWindow ->
+                if (Looper.myLooper() == Looper.getMainLooper()) {
+                    runCatching { applyWindowPowerPolicy(phoneWindow, isBlackout = false) }
+                } else {
+                    mainHandler.post {
+                        runCatching { applyWindowPowerPolicy(phoneWindow, isBlackout = false) }
+                    }
+                }
+            }
         }
     }
 
     fun toggleBlackout() {
         if (_isBlackoutActive.value) {
-            wakePhoneScreen()
+            wakePhoneScreenInternal(fromManualToggle = true)
         } else {
             enableBlackout()
         }
@@ -255,11 +360,40 @@ class PhoneScreenPowerController(
     }
 
     fun shutdown() {
+        powerScope.cancel()
         runCatching { inputManager?.unregisterInputDeviceListener(inputDeviceListener) }
         attachedPhoneWindowRef?.get()?.let { phoneWindow ->
             mainHandler.post { runCatching { releaseWakeLockAndBrightness(phoneWindow) } }
         }
         attachedPhoneWindowRef = null
+    }
+
+    companion object {
+        const val HARDWARE_POINTER_IDLE_BLACKOUT_MS = 15_000L
+
+        fun isFirstTouchContactAction(actionMasked: Int): Boolean {
+            return actionMasked == MotionEvent.ACTION_DOWN ||
+                actionMasked == MotionEvent.ACTION_POINTER_DOWN
+        }
+
+        fun shouldAutoActivateThermalBlackout(
+            hasActiveExternalDisplay: Boolean,
+            isAlreadyBlackout: Boolean,
+            isHardwarePointerActive: Boolean,
+            isSoftKeyboardRelayOpen: Boolean,
+            manualToggleSuppressed: Boolean,
+            lastPhoneTouchElapsedMs: Long,
+            nowElapsedMs: Long,
+            idleThresholdMs: Long = HARDWARE_POINTER_IDLE_BLACKOUT_MS
+        ): Boolean {
+            if (!hasActiveExternalDisplay || isAlreadyBlackout || !isHardwarePointerActive) {
+                return false
+            }
+            if (isSoftKeyboardRelayOpen || manualToggleSuppressed) {
+                return false
+            }
+            return (nowElapsedMs - lastPhoneTouchElapsedMs) > idleThresholdMs
+        }
     }
 }
 

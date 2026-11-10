@@ -77,6 +77,7 @@ import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -84,12 +85,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.dexxp.desktop.browser.DesktopWebAppsSection
+import com.dexxp.desktop.launcher.AppShortcutHelper
+import com.dexxp.desktop.launcher.DesktopAppShortcut
 import com.dexxp.desktop.model.AppCategory
 import com.dexxp.desktop.model.AppWindowLaunchPolicy
 import com.dexxp.desktop.model.DesktopAppItem
 import com.dexxp.desktop.model.DesktopWebAppDefinition
 import com.dexxp.desktop.model.WindowSnapMode
 import com.dexxp.desktop.ui.icons.DesktopIcons
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
 /**
@@ -111,6 +116,7 @@ fun StartMenuPanel(
     onTogglePinTaskbar: (String) -> Unit,
     onToggleDesktopShortcut: (String) -> Unit,
     onChangeWindowPolicy: (String, AppWindowLaunchPolicy) -> Unit = { _, _ -> },
+    onLaunchShortcut: (DesktopAppShortcut) -> Unit = {},
     onOpenAppInfo: (String) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
@@ -498,6 +504,7 @@ fun StartMenuPanel(
                             onChangeWindowPolicy = { nextPolicy ->
                                 onChangeWindowPolicy(app.packageName, nextPolicy)
                             },
+                            onLaunchShortcut = onLaunchShortcut,
                             onOpenAppInfo = { onOpenAppInfo(app.packageName) }
                         )
                     }
@@ -573,6 +580,7 @@ private fun StartMenuAppTile(
     onTogglePinTaskbar: () -> Unit,
     onToggleDesktopShortcut: () -> Unit,
     onChangeWindowPolicy: (AppWindowLaunchPolicy) -> Unit,
+    onLaunchShortcut: (DesktopAppShortcut) -> Unit,
     onOpenAppInfo: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -692,6 +700,7 @@ private fun StartMenuAppTile(
 
         AppLaunchContextMenu(
             expanded = menuExpanded,
+            packageName = app.packageName,
             isPinnedTaskbar = isPinnedTaskbar,
             isOnDesktop = isOnDesktop,
             currentPolicy = currentPolicy,
@@ -703,6 +712,11 @@ private fun StartMenuAppTile(
                 localMenuExpanded = false
                 onMenuOpenChanged(false)
                 onLaunch(snap, multi)
+            },
+            onLaunchShortcut = { shortcut ->
+                localMenuExpanded = false
+                onMenuOpenChanged(false)
+                onLaunchShortcut(shortcut)
             },
             onTogglePinTaskbar = {
                 localMenuExpanded = false
@@ -729,16 +743,29 @@ private fun StartMenuAppTile(
 @Composable
 fun AppLaunchContextMenu(
     expanded: Boolean,
+    packageName: String? = null,
     isPinnedTaskbar: Boolean,
     isOnDesktop: Boolean,
     currentPolicy: AppWindowLaunchPolicy = AppWindowLaunchPolicy.AUTO,
     onDismiss: () -> Unit,
     onSelectSnapMode: (WindowSnapMode?, Boolean) -> Unit,
+    onLaunchShortcut: ((DesktopAppShortcut) -> Unit)? = null,
     onTogglePinTaskbar: () -> Unit,
     onToggleDesktopShortcut: () -> Unit,
     onChangeWindowPolicy: ((AppWindowLaunchPolicy) -> Unit)? = null,
     onOpenAppInfo: () -> Unit
 ) {
+    val context = LocalContext.current
+    var appShortcuts by remember(packageName) { mutableStateOf<List<DesktopAppShortcut>>(emptyList()) }
+
+    LaunchedEffect(expanded, packageName) {
+        if (expanded && !packageName.isNullOrBlank()) {
+            appShortcuts = withContext(Dispatchers.IO) {
+                AppShortcutHelper.getShortcutsForPackage(context, packageName)
+            }
+        }
+    }
+
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss
@@ -750,6 +777,30 @@ fun AppLaunchContextMenu(
             },
             onClick = { onSelectSnapMode(null, false) }
         )
+        if (appShortcuts.isNotEmpty() && onLaunchShortcut != null) {
+            HorizontalDivider()
+            appShortcuts.forEach { shortcut ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = shortcut.label,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = DesktopIcons.ArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    },
+                    onClick = { onLaunchShortcut(shortcut) }
+                )
+            }
+            HorizontalDivider()
+        }
         DropdownMenuItem(
             text = { Text(if (isPinnedTaskbar) "Unpin from Taskbar" else "Pin to Taskbar") },
             leadingIcon = {

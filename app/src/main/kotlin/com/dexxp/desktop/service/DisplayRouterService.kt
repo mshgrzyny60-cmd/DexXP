@@ -207,13 +207,21 @@ class DisplayRouterService : Service() {
                 .drop(1)
                 .collect { (overlayGranted, a11yGranted) ->
                     if ((overlayGranted || a11yGranted) &&
-                        attachedDisplayId != Display.INVALID_DISPLAY &&
-                        !titlebarOverlayController.isAttached
+                        attachedDisplayId != Display.INVALID_DISPLAY
                     ) {
                         val display = displayManager.getDisplay(attachedDisplayId)
                         val scaledCtx = activeScaledDisplayContext
                         if (display != null && display.isValid && scaledCtx != null) {
-                            titlebarOverlayController.attachToDisplay(display, scaledCtx)
+                            var titlebarJustAttached = false
+                            if (!titlebarOverlayController.isAttached) {
+                                titlebarJustAttached = titlebarOverlayController.attachToDisplay(display, scaledCtx)
+                            }
+                            if (!cursorOverlayController.isAttached ||
+                                titlebarJustAttached ||
+                                (a11yGranted && !cursorOverlayController.isAccessibilityOverlay)
+                            ) {
+                                cursorOverlayController.attachToDisplay(display, scaledCtx)
+                            }
                         }
                     }
                 }
@@ -426,7 +434,7 @@ class DisplayRouterService : Service() {
             missionControlController = dexApp.missionControlController,
             phoneHubController = dexApp.phoneHubController,
             keyboardManager = dexApp.keyboardManager,
-            hasHardwareCursorOverlay = { cursorOverlayController.isAttached }
+            cursorOverlayAttachedFlow = cursorOverlayController.isAttachedFlow
         )
 
         presentation.setOnDismissListener {
@@ -452,10 +460,8 @@ class DisplayRouterService : Service() {
             attachedDisplayId = display.displayId
             // Attach 28dp universal top window bar (floating above containers & pinned pill on fullscreen apps)
             titlebarOverlayController.attachToDisplay(display, scaledDisplayContext)
-            // Top-most cursor HUD overlay above desktop (only for physical HDMI/DP monitors, skip on scrcpy virtual displays to prevent clickjacking touch drops)
-            if (info.transportType != DisplayTransportType.SCRCPY_VIRTUAL_DISPLAY) {
-                cursorOverlayController.attachToDisplay(display)
-            }
+            // Attach top-most hardware cursor sprite, luminance dimmer & snap HUD above all third-party apps
+            cursorOverlayController.attachToDisplay(display, scaledDisplayContext)
             dexApp.pointerFocusBridge.bringShellToFront(requestFocus = false)
             promoteToForeground(
                 statusText = "${info.name} • ${info.resolutionSummary} (${targetDpi}dpi)"

@@ -52,51 +52,13 @@ class WindowSnappingController(
         displayWidthPx: Int,
         displayHeightPx: Int,
         densityDpi: Int
-    ): WindowSnapMode? {
-        if (displayWidthPx <= 0 || displayHeightPx <= 0) return null
-        val density = densityDpi / 160f
-        val taskbarPx = (AppLauncher.TASKBAR_HEIGHT_DP * density).roundToInt()
-        val usableHeight = (displayHeightPx - taskbarPx).coerceAtLeast(240)
-
-        // Ignore drags inside the bottom Taskbar strip itself
-        if (y >= usableHeight) return null
-
-        val edgeThreshold = (EDGE_SNAP_TRIGGER_DP * density).coerceAtLeast(18f)
-        val cornerSpan = (CORNER_SPAN_DP * density).coerceAtLeast(72f)
-
-        val nearLeft = x <= edgeThreshold
-        val nearRight = x >= (displayWidthPx - edgeThreshold)
-        val nearTop = y <= edgeThreshold
-        val inTopCornerBand = y <= cornerSpan
-        val inBottomCornerBand = y >= (usableHeight - cornerSpan)
-        val inLeftCornerBand = x <= cornerSpan
-        val inRightCornerBand = x >= (displayWidthPx - cornerSpan)
-
-        return when {
-            (nearLeft && inTopCornerBand) || (nearTop && inLeftCornerBand) ->
-                WindowSnapMode.TOP_LEFT_QUADRANT
-
-            (nearRight && inTopCornerBand) || (nearTop && inRightCornerBand) ->
-                WindowSnapMode.TOP_RIGHT_QUADRANT
-
-            nearLeft && inBottomCornerBand ->
-                WindowSnapMode.BOTTOM_LEFT_QUADRANT
-
-            nearRight && inBottomCornerBand ->
-                WindowSnapMode.BOTTOM_RIGHT_QUADRANT
-
-            nearLeft ->
-                WindowSnapMode.LEFT_HALF
-
-            nearRight ->
-                WindowSnapMode.RIGHT_HALF
-
-            nearTop ->
-                WindowSnapMode.MAXIMIZED
-
-            else -> null
-        }
-    }
+    ): WindowSnapMode? = evaluateSnapZoneStatic(
+        x = x,
+        y = y,
+        displayWidthPx = displayWidthPx,
+        displayHeightPx = displayHeightPx,
+        densityDpi = densityDpi
+    )
 
     /**
      * Computes exact Freeform `Rect` coordinates for all tiling, quadrant, container, and maximize modes.
@@ -114,8 +76,14 @@ class WindowSnappingController(
     /**
      * Updates the live semi-transparent snap preview overlay during an active drag gesture.
      */
-    fun onPointerDragMoved(x: Float, y: Float, displayInfo: ExternalDisplayInfo?) {
-        val targetPkg = sessionRepository.focusedOrMostRecentWindow()?.packageName
+    fun onPointerDragMoved(
+        x: Float,
+        y: Float,
+        displayInfo: ExternalDisplayInfo?,
+        targetPackageOverride: String? = null
+    ) {
+        val targetPkg = targetPackageOverride
+            ?: sessionRepository.focusedOrMostRecentWindow()?.packageName
         if (displayInfo == null || targetPkg == null) {
             if (sessionRepository.snapPreview.value != null) {
                 sessionRepository.setSnapPreview(null)
@@ -189,10 +157,62 @@ class WindowSnappingController(
     }
 
     companion object {
-        private const val EDGE_SNAP_TRIGGER_DP = 24f
-        private const val CORNER_SPAN_DP = 116f
+        const val EDGE_SNAP_TRIGGER_DP = 16f
+        const val CORNER_SPAN_DP = 116f
         const val SNAP_MARGIN_DP = 8
         const val FLOATING_TOP_HEADROOM_DP = 34
+
+        fun evaluateSnapZoneStatic(
+            x: Float,
+            y: Float,
+            displayWidthPx: Int,
+            displayHeightPx: Int,
+            densityDpi: Int
+        ): WindowSnapMode? {
+            if (displayWidthPx <= 0 || displayHeightPx <= 0) return null
+            val density = densityDpi / 160f
+            val taskbarPx = (AppLauncher.TASKBAR_HEIGHT_DP * density).roundToInt()
+            val usableHeight = (displayHeightPx - taskbarPx).coerceAtLeast(240)
+
+            // Ignore drags inside the bottom Taskbar strip itself
+            if (y >= usableHeight) return null
+
+            val edgeThreshold = (EDGE_SNAP_TRIGGER_DP * density).coerceAtLeast(12f)
+            val cornerSpan = (CORNER_SPAN_DP * density).coerceAtLeast(72f)
+
+            val nearLeft = x <= edgeThreshold
+            val nearRight = x >= (displayWidthPx - edgeThreshold)
+            val nearTop = y <= edgeThreshold
+            val inTopCornerBand = y <= cornerSpan
+            val inBottomCornerBand = y >= (usableHeight - cornerSpan)
+            val inLeftCornerBand = x <= cornerSpan
+            val inRightCornerBand = x >= (displayWidthPx - cornerSpan)
+
+            return when {
+                (nearLeft && inTopCornerBand) || (nearTop && inLeftCornerBand) ->
+                    WindowSnapMode.TOP_LEFT_QUADRANT
+
+                (nearRight && inTopCornerBand) || (nearTop && inRightCornerBand) ->
+                    WindowSnapMode.TOP_RIGHT_QUADRANT
+
+                nearLeft && inBottomCornerBand ->
+                    WindowSnapMode.BOTTOM_LEFT_QUADRANT
+
+                nearRight && inBottomCornerBand ->
+                    WindowSnapMode.BOTTOM_RIGHT_QUADRANT
+
+                nearLeft ->
+                    WindowSnapMode.LEFT_HALF
+
+                nearRight ->
+                    WindowSnapMode.RIGHT_HALF
+
+                nearTop ->
+                    WindowSnapMode.MAXIMIZED
+
+                else -> null
+            }
+        }
 
         /**
          * Pure integer geometry solver for all desktop container & tiling modes.

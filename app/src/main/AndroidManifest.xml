@@ -100,6 +100,7 @@
             android:label="@string/secondary_home_label"
             android:launchMode="singleTask"
             android:resizeableActivity="false"
+            android:supportsPictureInPicture="false"
             android:stateNotNeeded="true"
             android:theme="@style/Theme.DexXP">
             <intent-filter>
