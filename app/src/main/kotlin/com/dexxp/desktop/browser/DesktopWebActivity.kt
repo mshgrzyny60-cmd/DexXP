@@ -3,6 +3,8 @@ package com.dexxp.desktop.browser
 import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.app.ActivityOptions
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Bitmap
 import android.hardware.display.DisplayManager
@@ -12,6 +14,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Display
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -26,9 +29,12 @@ import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -41,14 +47,21 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
@@ -60,6 +73,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -68,12 +82,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -86,6 +107,7 @@ import com.dexxp.desktop.ui.icons.DesktopIcons
 import com.dexxp.desktop.ui.theme.DexXPTheme
 import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.roundToInt
 
 /**
  * High-Performance Hardware-Accelerated Desktop Web App Container.
@@ -100,6 +122,9 @@ class DesktopWebActivity : ComponentActivity() {
     private var customVideoView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     private var onHideCustomVideoAction: (() -> Unit)? = null
+    private var onToggleFullscreenImmersionAction: (() -> Unit)? = null
+    private var onExitFullscreenImmersionAction: (() -> Boolean)? = null
+    private var onZoomStepAction: ((Int) -> Unit)? = null
     private var hostedDisplayId: Int = Display.INVALID_DISPLAY
     private var displayManager: DisplayManager? = null
     private var recordPackageKey: String = "dexxp.webapp.browser"
@@ -166,8 +191,11 @@ class DesktopWebActivity : ComponentActivity() {
                             webView = wv
                             configureDesktopWebSettings(wv)
                         },
-                        onRegisterCustomVideoHandlers = { onHide ->
+                        onRegisterCustomVideoHandlers = { onHide, onToggleFullscreen, onExitFullscreen, onZoomStep ->
                             onHideCustomVideoAction = onHide
+                            onToggleFullscreenImmersionAction = onToggleFullscreen
+                            onExitFullscreenImmersionAction = onExitFullscreen
+                            onZoomStepAction = onZoomStep
                         },
                         onCustomVideoShown = { view, callback ->
                             customVideoView = view
@@ -250,6 +278,28 @@ class DesktopWebActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_F11 -> {
+                    onToggleFullscreenImmersionAction?.invoke()
+                    return true
+                }
+                KeyEvent.KEYCODE_ESCAPE -> {
+                    if (customVideoView != null) {
+                        onHideCustomVideoAction?.invoke()
+                        return true
+                    }
+                    if (onExitFullscreenImmersionAction?.invoke() == true) {
+                        return true
+                    }
+                }
+            }
+            val zoomAction = resolveZoomKeyAction(event.keyCode, event.isCtrlPressed)
+            if (zoomAction != null) {
+                onZoomStepAction?.invoke(zoomAction)
+                return true
+            }
+        }
         val app = application as? DexXpApplication
         if (app != null && app.keyboardManager.onHardwareKeyEvent(event)) {
             return true
@@ -476,19 +526,71 @@ class DesktopWebActivity : ComponentActivity() {
                 }
             }
         }
+
+        const val DEFAULT_ZOOM_PERCENT = 100
+        const val MIN_ZOOM_PERCENT = 50
+        const val MAX_ZOOM_PERCENT = 300
+        const val ZOOM_STEP_PERCENT = 10
+
+        /**
+         * Computes the next clamped zoom percentage given a step delta (+1 = zoom in, -1 = zoom out, 0 = reset to 100%).
+         */
+        fun computeNextZoomPercent(currentPercent: Int, stepDelta: Int): Int {
+            if (stepDelta == 0) return DEFAULT_ZOOM_PERCENT
+            return (currentPercent + stepDelta * ZOOM_STEP_PERCENT).coerceIn(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT)
+        }
+
+        /**
+         * Resolves a hardware keyboard zoom shortcut (`Ctrl + =/+`, `Ctrl + -`, `Ctrl + 0`) into a zoom step:
+         * `+1` = zoom in, `-1` = zoom out, `0` = reset to 100%, `null` = not a zoom key event.
+         */
+        fun resolveZoomKeyAction(keyCode: Int, isCtrlPressed: Boolean): Int? {
+            if (!isCtrlPressed) return null
+            return when (keyCode) {
+                KeyEvent.KEYCODE_EQUALS,
+                KeyEvent.KEYCODE_PLUS,
+                KeyEvent.KEYCODE_NUMPAD_ADD -> 1
+                KeyEvent.KEYCODE_MINUS,
+                KeyEvent.KEYCODE_NUMPAD_SUBTRACT -> -1
+                KeyEvent.KEYCODE_0,
+                KeyEvent.KEYCODE_NUMPAD_0 -> 0
+                else -> null
+            }
+        }
+
+        fun applyWebZoom(webView: WebView?, targetPercent: Int, stepDelta: Int) {
+            val wv = webView ?: return
+            val clamped = targetPercent.coerceIn(MIN_ZOOM_PERCENT, MAX_ZOOM_PERCENT)
+            wv.settings.textZoom = clamped
+            if (stepDelta > 0) {
+                runCatching { wv.zoomIn() }
+            } else if (stepDelta < 0) {
+                runCatching { wv.zoomOut() }
+            }
+            wv.evaluateJavascript(
+                "try { document.documentElement.style.zoom = '${clamped}%'; } catch(e) {}",
+                null
+            )
+        }
     }
 }
 
 private val TopBarButtonShape = RoundedCornerShape(8.dp)
 private val TopBarPillShape = RoundedCornerShape(50)
 
+@SuppressLint("ClickableViewAccessibility")
 @Composable
 private fun DesktopWebScreen(
     initialUrl: String,
     appTitle: String,
     isMaximized: Boolean,
     onInitWebView: (WebView) -> Unit,
-    onRegisterCustomVideoHandlers: (onHide: () -> Unit) -> Unit,
+    onRegisterCustomVideoHandlers: (
+        onHide: () -> Unit,
+        onToggleFullscreen: () -> Unit,
+        onExitFullscreen: () -> Boolean,
+        onZoomStep: (Int) -> Unit
+    ) -> Unit,
     onCustomVideoShown: (View, WebChromeClient.CustomViewCallback) -> Unit,
     onCustomVideoHidden: () -> Unit,
     onLaunchNativeCapCutLandscape: () -> Unit,
@@ -496,6 +598,8 @@ private fun DesktopWebScreen(
     onMaximizeOrRestore: () -> Unit,
     onClose: () -> Unit
 ) {
+    val context = LocalContext.current
+    val density = LocalDensity.current
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var currentTitle by remember { mutableStateOf(appTitle) }
     var currentUrl by remember { mutableStateOf(initialUrl) }
@@ -506,14 +610,61 @@ private fun DesktopWebScreen(
     var canGoBack by remember { mutableStateOf(false) }
     var canGoForward by remember { mutableStateOf(false) }
 
+    // Feature 1.1: True Fullscreen Immersion (F11) & top-edge cursor reveal state
+    var isFullscreenImmersion by remember { mutableStateOf(false) }
+    var isTopEdgeHeaderRevealed by remember { mutableStateOf(false) }
+
+    // Feature 1.2: Keyboard & Mouse Zoom state
+    var zoomPercent by remember { mutableIntStateOf(DesktopWebActivity.DEFAULT_ZOOM_PERCENT) }
+
+    // Feature 1.3: Desktop Right-Click M3 Context Menu & Inspect/Source Drawer state
+    var isContextMenuOpen by remember { mutableStateOf(false) }
+    var contextMenuOffsetPx by remember { mutableStateOf(IntOffset.Zero) }
+    var inspectSourceContent by remember { mutableStateOf<String?>(null) }
+
     var fullScreenVideoView by remember { mutableStateOf<View?>(null) }
 
-    val hideVideo = {
+    val hideVideo: () -> Unit = {
         fullScreenVideoView = null
         onCustomVideoHidden()
     }
 
-    onRegisterCustomVideoHandlers(hideVideo)
+    val toggleFullscreenImmersion: () -> Unit = {
+        val next = !isFullscreenImmersion
+        isFullscreenImmersion = next
+        isTopEdgeHeaderRevealed = false
+    }
+
+    val exitFullscreenImmersion: () -> Boolean = {
+        if (inspectSourceContent != null) {
+            inspectSourceContent = null
+            true
+        } else if (isContextMenuOpen) {
+            isContextMenuOpen = false
+            true
+        } else if (isFullscreenImmersion) {
+            isFullscreenImmersion = false
+            isTopEdgeHeaderRevealed = false
+            true
+        } else {
+            false
+        }
+    }
+
+    val applyZoomStep: (Int) -> Unit = { stepDelta ->
+        val next = DesktopWebActivity.computeNextZoomPercent(zoomPercent, stepDelta)
+        zoomPercent = next
+        DesktopWebActivity.applyWebZoom(webViewRef, next, stepDelta)
+    }
+
+    onRegisterCustomVideoHandlers(
+        hideVideo,
+        toggleFullscreenImmersion,
+        exitFullscreenImmersion,
+        applyZoomStep
+    )
+
+    val showTopHeader = !isFullscreenImmersion || isTopEdgeHeaderRevealed
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -521,178 +672,225 @@ private fun DesktopWebScreen(
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.surface)
         ) {
-            // Material 3 Desktop Top Bar with Navigation, CapCut 16:10 Native Fallback & [—] [□] [X] Controls
-            Surface(
-                tonalElevation = 2.dp,
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(44.dp)
+            // Material 3 Desktop Top Bar with Navigation, Fullscreen Immersion (F11), Zoom Reset, CapCut 16:10 & [—] [□] [X]
+            AnimatedVisibility(
+                visible = showTopHeader,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
             ) {
-                Row(
+                Surface(
+                    tonalElevation = 2.dp,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(start = 10.dp, end = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .fillMaxWidth()
+                        .height(44.dp)
                 ) {
-                    // Navigation actions: Back, Forward, Refresh, Title
                     Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(start = 10.dp, end = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        modifier = Modifier.weight(1f, fill = false)
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        FilledTonalIconButton(
-                            onClick = { webViewRef?.goBack() },
-                            enabled = canGoBack,
-                            shape = CircleShape,
-                            modifier = Modifier
-                                .size(32.dp)
-                                .pointerHoverIcon(PointerIcon.Hand),
-                            colors = IconButtonDefaults.filledTonalIconButtonColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
-                            )
+                        // Navigation actions: Back, Forward, Refresh, Title
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            modifier = Modifier.weight(1f, fill = false)
                         ) {
-                            Icon(DesktopIcons.ArrowLeft, contentDescription = "Back", modifier = Modifier.size(17.dp))
-                        }
-
-                        FilledTonalIconButton(
-                            onClick = { webViewRef?.goForward() },
-                            enabled = canGoForward,
-                            shape = CircleShape,
-                            modifier = Modifier
-                                .size(32.dp)
-                                .pointerHoverIcon(PointerIcon.Hand),
-                            colors = IconButtonDefaults.filledTonalIconButtonColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
-                            )
-                        ) {
-                            Icon(DesktopIcons.ArrowRight, contentDescription = "Forward", modifier = Modifier.size(17.dp))
-                        }
-
-                        FilledTonalIconButton(
-                            onClick = {
-                                hasError = false
-                                DesktopWebActivity.injectWindowsDesktopPlatformSpoof(webViewRef)
-                                webViewRef?.reload()
-                            },
-                            shape = CircleShape,
-                            modifier = Modifier
-                                .size(32.dp)
-                                .pointerHoverIcon(PointerIcon.Hand),
-                            colors = IconButtonDefaults.filledTonalIconButtonColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
-                            )
-                        ) {
-                            Icon(DesktopIcons.Maximize, contentDescription = "Reload", modifier = Modifier.size(15.dp))
-                        }
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        Text(
-                            text = currentTitle,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.width(340.dp)
-                        )
-                    }
-
-                    // Right Cluster: Native CapCut 16:10 Fallback, Desktop Engine Badge, & Window Controls [—] [□] [X]
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        val isCapCut = currentUrl.contains("capcut", ignoreCase = true) ||
-                            currentTitle.contains("CapCut", ignoreCase = true)
-                        if (isCapCut) {
-                            val mobileBtnHover = remember { MutableInteractionSource() }
-                            val isMobileBtnHovered by mobileBtnHover.collectIsHoveredAsState()
-                            Surface(
-                                onClick = onLaunchNativeCapCutLandscape,
-                                shape = TopBarPillShape,
-                                color = if (isMobileBtnHovered) {
-                                    MaterialTheme.colorScheme.primaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.secondaryContainer
-                                },
+                            FilledTonalIconButton(
+                                onClick = { webViewRef?.goBack() },
+                                enabled = canGoBack,
+                                shape = CircleShape,
                                 modifier = Modifier
-                                    .height(28.dp)
-                                    .hoverable(mobileBtnHover)
-                                    .pointerHoverIcon(PointerIcon.Hand)
+                                    .size(32.dp)
+                                    .pointerHoverIcon(PointerIcon.Hand),
+                                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                                )
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                Icon(DesktopIcons.ArrowLeft, contentDescription = "Back", modifier = Modifier.size(17.dp))
+                            }
+
+                            FilledTonalIconButton(
+                                onClick = { webViewRef?.goForward() },
+                                enabled = canGoForward,
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .pointerHoverIcon(PointerIcon.Hand),
+                                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                                )
+                            ) {
+                                Icon(DesktopIcons.ArrowRight, contentDescription = "Forward", modifier = Modifier.size(17.dp))
+                            }
+
+                            FilledTonalIconButton(
+                                onClick = {
+                                    hasError = false
+                                    DesktopWebActivity.injectWindowsDesktopPlatformSpoof(webViewRef)
+                                    webViewRef?.reload()
+                                },
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .pointerHoverIcon(PointerIcon.Hand),
+                                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                                )
+                            ) {
+                                Icon(DesktopIcons.Maximize, contentDescription = "Reload", modifier = Modifier.size(15.dp))
+                            }
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            Text(
+                                text = currentTitle,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.width(300.dp)
+                            )
+                        }
+
+                        // Right Cluster: Zoom Badge, Native CapCut 16:10 Fallback, Engine Badge, Fullscreen (F11) & [—] [□] [X]
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            if (zoomPercent != DesktopWebActivity.DEFAULT_ZOOM_PERCENT) {
+                                Surface(
+                                    onClick = { applyZoomStep(0) },
+                                    shape = TopBarPillShape,
+                                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                                    modifier = Modifier
+                                        .height(26.dp)
+                                        .pointerHoverIcon(PointerIcon.Hand)
                                 ) {
-                                    Icon(
-                                        imageVector = DesktopIcons.AspectLandscape,
-                                        contentDescription = null,
-                                        tint = if (isMobileBtnHovered) {
-                                            MaterialTheme.colorScheme.onPrimaryContainer
-                                        } else {
-                                            MaterialTheme.colorScheme.onSecondaryContainer
-                                        },
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Text(
-                                        text = "Mobile App (16:10)",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = if (isMobileBtnHovered) {
-                                            MaterialTheme.colorScheme.onPrimaryContainer
-                                        } else {
-                                            MaterialTheme.colorScheme.onSecondaryContainer
-                                        }
-                                    )
+                                    Box(
+                                        modifier = Modifier.padding(horizontal = 9.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "${zoomPercent}% • Reset",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                                        )
+                                    }
                                 }
                             }
-                        }
 
-                        Surface(
-                            shape = TopBarPillShape,
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            modifier = Modifier.padding(end = 2.dp)
-                        ) {
-                            Text(
-                                text = "WIN11 CHROME 130",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            val isCapCut = currentUrl.contains("capcut", ignoreCase = true) ||
+                                currentTitle.contains("CapCut", ignoreCase = true)
+                            if (isCapCut) {
+                                val mobileBtnHover = remember { MutableInteractionSource() }
+                                val isMobileBtnHovered by mobileBtnHover.collectIsHoveredAsState()
+                                Surface(
+                                    onClick = onLaunchNativeCapCutLandscape,
+                                    shape = TopBarPillShape,
+                                    color = if (isMobileBtnHovered) {
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.secondaryContainer
+                                    },
+                                    modifier = Modifier
+                                        .height(28.dp)
+                                        .hoverable(mobileBtnHover)
+                                        .pointerHoverIcon(PointerIcon.Hand)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = DesktopIcons.AspectLandscape,
+                                            contentDescription = null,
+                                            tint = if (isMobileBtnHovered) {
+                                                MaterialTheme.colorScheme.onPrimaryContainer
+                                            } else {
+                                                MaterialTheme.colorScheme.onSecondaryContainer
+                                            },
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = "Mobile App (16:10)",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (isMobileBtnHovered) {
+                                                MaterialTheme.colorScheme.onPrimaryContainer
+                                            } else {
+                                                MaterialTheme.colorScheme.onSecondaryContainer
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            Surface(
+                                shape = TopBarPillShape,
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                modifier = Modifier.padding(end = 2.dp)
+                            ) {
+                                Text(
+                                    text = "WIN11 CHROME 130",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+
+                            // Fullscreen Immersion (F11) Toggle Icon
+                            WebWindowControlIcon(
+                                icon = DesktopIcons.ResizeHandle,
+                                contentDescription = if (isFullscreenImmersion) {
+                                    "Exit Fullscreen Immersion (F11 / Esc)"
+                                } else {
+                                    "Fullscreen Immersion (F11)"
+                                },
+                                hoverColor = MaterialTheme.colorScheme.primaryContainer,
+                                iconTint = if (isFullscreenImmersion) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                                hoverIconTint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                onClick = toggleFullscreenImmersion
+                            )
+
+                            // Minimize [—]
+                            WebWindowControlIcon(
+                                icon = DesktopIcons.Minimize,
+                                contentDescription = "Minimize Window",
+                                hoverColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                iconTint = MaterialTheme.colorScheme.onSurface,
+                                onClick = onMinimize
+                            )
+
+                            // Maximize / Container Toggle [□]
+                            WebWindowControlIcon(
+                                icon = if (isMaximized) DesktopIcons.RestoreWindow else DesktopIcons.Maximize,
+                                contentDescription = "Toggle Container / Fullscreen",
+                                hoverColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                iconTint = MaterialTheme.colorScheme.onSurface,
+                                onClick = onMaximizeOrRestore
+                            )
+
+                            // Close [X] (Red Hover)
+                            WebWindowControlIcon(
+                                icon = DesktopIcons.Close,
+                                contentDescription = "Close Window",
+                                hoverColor = Color(0xFFD93025),
+                                iconTint = MaterialTheme.colorScheme.onSurface,
+                                hoverIconTint = Color.White,
+                                onClick = onClose
                             )
                         }
-
-                        // Minimize [—]
-                        WebWindowControlIcon(
-                            icon = DesktopIcons.Minimize,
-                            contentDescription = "Minimize Window",
-                            hoverColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            iconTint = MaterialTheme.colorScheme.onSurface,
-                            onClick = onMinimize
-                        )
-
-                        // Maximize / Container Toggle [□]
-                        WebWindowControlIcon(
-                            icon = if (isMaximized) DesktopIcons.RestoreWindow else DesktopIcons.Maximize,
-                            contentDescription = "Toggle Container / Fullscreen",
-                            hoverColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            iconTint = MaterialTheme.colorScheme.onSurface,
-                            onClick = onMaximizeOrRestore
-                        )
-
-                        // Close [X] (Red Hover)
-                        WebWindowControlIcon(
-                            icon = DesktopIcons.Close,
-                            contentDescription = "Close Window",
-                            hoverColor = Color(0xFFD93025),
-                            iconTint = MaterialTheme.colorScheme.onSurface,
-                            hoverIconTint = Color.White,
-                            onClick = onClose
-                        )
                     }
                 }
             }
@@ -717,8 +915,8 @@ private fun DesktopWebScreen(
             Box(modifier = Modifier.fillMaxSize()) {
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
-                    factory = { context ->
-                        WebView(context).apply {
+                    factory = { ctx ->
+                        WebView(ctx).apply {
                             layoutParams = ViewGroup.LayoutParams(
                                 ViewGroup.LayoutParams.MATCH_PARENT,
                                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -728,6 +926,57 @@ private fun DesktopWebScreen(
 
                             var didRecoverIncompatibilityRedirect = false
                             var injectedEarlyOnCurrentNav = false
+
+                            // Intercept Ctrl + Mouse Scroll Wheel zooming, top-edge fullscreen reveal, and secondary right-click
+                            setOnGenericMotionListener { _, event ->
+                                val d = resources.displayMetrics.density
+                                if (isFullscreenImmersion) {
+                                    if (!isTopEdgeHeaderRevealed && event.y <= 10f * d) {
+                                        isTopEdgeHeaderRevealed = true
+                                    } else if (isTopEdgeHeaderRevealed && event.y > 54f * d) {
+                                        isTopEdgeHeaderRevealed = false
+                                    }
+                                }
+                                if (event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS &&
+                                    (event.buttonState and MotionEvent.BUTTON_SECONDARY) != 0
+                                ) {
+                                    contextMenuOffsetPx = IntOffset(event.x.roundToInt(), event.y.roundToInt())
+                                    isContextMenuOpen = true
+                                    return@setOnGenericMotionListener true
+                                }
+                                if (event.actionMasked == MotionEvent.ACTION_SCROLL &&
+                                    (event.metaState and KeyEvent.META_CTRL_ON) != 0
+                                ) {
+                                    val vScroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+                                    if (vScroll > 0.05f) {
+                                        applyZoomStep(1)
+                                        return@setOnGenericMotionListener true
+                                    } else if (vScroll < -0.05f) {
+                                        applyZoomStep(-1)
+                                        return@setOnGenericMotionListener true
+                                    }
+                                }
+                                false
+                            }
+
+                            setOnTouchListener { _, event ->
+                                val d = resources.displayMetrics.density
+                                if (isFullscreenImmersion) {
+                                    if (!isTopEdgeHeaderRevealed && event.y <= 10f * d) {
+                                        isTopEdgeHeaderRevealed = true
+                                    } else if (isTopEdgeHeaderRevealed && event.y > 54f * d) {
+                                        isTopEdgeHeaderRevealed = false
+                                    }
+                                }
+                                if (event.actionMasked == MotionEvent.ACTION_DOWN &&
+                                    (event.buttonState and MotionEvent.BUTTON_SECONDARY) != 0
+                                ) {
+                                    contextMenuOffsetPx = IntOffset(event.x.roundToInt(), event.y.roundToInt())
+                                    isContextMenuOpen = true
+                                    return@setOnTouchListener true
+                                }
+                                false
+                            }
 
                             webViewClient = object : WebViewClient() {
                                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -759,7 +1008,7 @@ private fun DesktopWebScreen(
                                     }
                                     return runCatching {
                                         val intent = Intent(Intent.ACTION_VIEW, uri)
-                                        context.startActivity(intent)
+                                        ctx.startActivity(intent)
                                         true
                                     }.getOrDefault(true)
                                 }
@@ -787,6 +1036,9 @@ private fun DesktopWebScreen(
 
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     DesktopWebActivity.injectWindowsDesktopPlatformSpoof(view)
+                                    if (zoomPercent != DesktopWebActivity.DEFAULT_ZOOM_PERCENT) {
+                                        DesktopWebActivity.applyWebZoom(view, zoomPercent, 0)
+                                    }
                                     isLoading = false
                                     canGoBack = view?.canGoBack() == true
                                     canGoForward = view?.canGoForward() == true
@@ -847,6 +1099,307 @@ private fun DesktopWebScreen(
                         }
                     }
                 )
+
+                // Top-Edge Hover Sensor Strip for Fullscreen Immersion Mode (`F11`)
+                if (isFullscreenImmersion && !isTopEdgeHeaderRevealed) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .align(Alignment.TopCenter)
+                            .pointerInput(Unit) {
+                                awaitPointerEventScope {
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        if (event.type == PointerEventType.Enter ||
+                                            event.type == PointerEventType.Move ||
+                                            event.type == PointerEventType.Press
+                                        ) {
+                                            isTopEdgeHeaderRevealed = true
+                                        }
+                                    }
+                                }
+                            }
+                    )
+                }
+
+                // Feature 1.3: Material 3 Desktop Right-Click Context Menu
+                if (isContextMenuOpen) {
+                    val menuOffsetDp = with(density) {
+                        DpOffset(contextMenuOffsetPx.x.toDp(), contextMenuOffsetPx.y.toDp())
+                    }
+                    Box(modifier = Modifier.offset { contextMenuOffsetPx }) {
+                        DropdownMenu(
+                            expanded = isContextMenuOpen,
+                            onDismissRequest = { isContextMenuOpen = false },
+                            offset = DpOffset(0.dp, 0.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Copy", style = MaterialTheme.typography.bodyMedium) },
+                                leadingIcon = {
+                                    Icon(DesktopIcons.Copy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                },
+                                onClick = {
+                                    isContextMenuOpen = false
+                                    webViewRef?.evaluateJavascript(
+                                        "(window.getSelection ? window.getSelection().toString() : '')"
+                                    ) { rawJson ->
+                                        val selected = decodeJsStringResult(rawJson)
+                                        if (selected.isNotEmpty()) {
+                                            val cm = context.getSystemService(ClipboardManager::class.java)
+                                            cm?.setPrimaryClip(ClipData.newPlainText("Web Selection", selected))
+                                        }
+                                    }
+                                    webViewRef?.evaluateJavascript(
+                                        "try { document.execCommand('copy'); } catch(e) {}",
+                                        null
+                                    )
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Paste", style = MaterialTheme.typography.bodyMedium) },
+                                leadingIcon = {
+                                    Icon(DesktopIcons.Clipboard, contentDescription = null, modifier = Modifier.size(16.dp))
+                                },
+                                onClick = {
+                                    isContextMenuOpen = false
+                                    val cm = context.getSystemService(ClipboardManager::class.java)
+                                    val clipText = cm?.primaryClip
+                                        ?.takeIf { it.itemCount > 0 }
+                                        ?.getItemAt(0)
+                                        ?.coerceToText(context)
+                                        ?.toString()
+                                        .orEmpty()
+                                    if (clipText.isNotEmpty()) {
+                                        val escaped = escapeJsString(clipText)
+                                        webViewRef?.evaluateJavascript(
+                                            """
+                                            (function() {
+                                                try {
+                                                    if (!document.execCommand('insertText', false, '$escaped')) {
+                                                        var el = document.activeElement;
+                                                        if (el && typeof el.value === 'string') {
+                                                            var s = el.selectionStart || 0;
+                                                            var e = el.selectionEnd || 0;
+                                                            el.value = el.value.slice(0, s) + '$escaped' + el.value.slice(e);
+                                                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                                                        }
+                                                    }
+                                                } catch (err) {}
+                                            })();
+                                            """.trimIndent(),
+                                            null
+                                        )
+                                    }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Cut", style = MaterialTheme.typography.bodyMedium) },
+                                leadingIcon = {
+                                    Icon(DesktopIcons.FileGeneric, contentDescription = null, modifier = Modifier.size(16.dp))
+                                },
+                                onClick = {
+                                    isContextMenuOpen = false
+                                    webViewRef?.evaluateJavascript(
+                                        "(window.getSelection ? window.getSelection().toString() : '')"
+                                    ) { rawJson ->
+                                        val selected = decodeJsStringResult(rawJson)
+                                        if (selected.isNotEmpty()) {
+                                            val cm = context.getSystemService(ClipboardManager::class.java)
+                                            cm?.setPrimaryClip(ClipData.newPlainText("Web Cut", selected))
+                                        }
+                                        webViewRef?.evaluateJavascript(
+                                            "try { document.execCommand('cut'); } catch(e) {}",
+                                            null
+                                        )
+                                    }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Select All", style = MaterialTheme.typography.bodyMedium) },
+                                leadingIcon = {
+                                    Icon(DesktopIcons.Layers, contentDescription = null, modifier = Modifier.size(16.dp))
+                                },
+                                onClick = {
+                                    isContextMenuOpen = false
+                                    webViewRef?.evaluateJavascript(
+                                        "try { document.execCommand('selectAll'); } catch(e) {}",
+                                        null
+                                    )
+                                }
+                            )
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = 4.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Back", style = MaterialTheme.typography.bodyMedium) },
+                                enabled = canGoBack,
+                                leadingIcon = {
+                                    Icon(DesktopIcons.ArrowLeft, contentDescription = null, modifier = Modifier.size(16.dp))
+                                },
+                                onClick = {
+                                    isContextMenuOpen = false
+                                    webViewRef?.goBack()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Forward", style = MaterialTheme.typography.bodyMedium) },
+                                enabled = canGoForward,
+                                leadingIcon = {
+                                    Icon(DesktopIcons.ArrowRight, contentDescription = null, modifier = Modifier.size(16.dp))
+                                },
+                                onClick = {
+                                    isContextMenuOpen = false
+                                    webViewRef?.goForward()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Reload", style = MaterialTheme.typography.bodyMedium) },
+                                leadingIcon = {
+                                    Icon(DesktopIcons.Maximize, contentDescription = null, modifier = Modifier.size(16.dp))
+                                },
+                                onClick = {
+                                    isContextMenuOpen = false
+                                    DesktopWebActivity.injectWindowsDesktopPlatformSpoof(webViewRef)
+                                    webViewRef?.reload()
+                                }
+                            )
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = 4.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Inspect / Source", style = MaterialTheme.typography.bodyMedium) },
+                                leadingIcon = {
+                                    Icon(DesktopIcons.Terminal, contentDescription = null, modifier = Modifier.size(16.dp))
+                                },
+                                onClick = {
+                                    isContextMenuOpen = false
+                                    webViewRef?.evaluateJavascript(
+                                        """
+                                        (function() {
+                                            try {
+                                                var html = document.documentElement ? document.documentElement.outerHTML : '';
+                                                return 'URL: ' + location.href + '\nTitle: ' + document.title + '\nPlatform: ' + navigator.platform + ' | UA: ' + navigator.userAgent + '\n\n' + html.slice(0, 16000);
+                                            } catch (e) {
+                                                return 'Unable to inspect DOM: ' + e;
+                                            }
+                                        })();
+                                        """.trimIndent()
+                                    ) { rawJson ->
+                                        inspectSourceContent = decodeJsStringResult(rawJson).ifBlank {
+                                            "URL: $currentUrl\nTitle: $currentTitle"
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                    }
+                    // Consume unused reference warning while keeping density calculation ready
+                    if (menuOffsetDp.x < 0.dp) Unit
+                }
+
+                // Inline Material 3 Inspect / Source Drawer Overlay
+                inspectSourceContent?.let { sourceDump ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.52f))
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { inspectSourceContent = null },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            tonalElevation = 8.dp,
+                            modifier = Modifier
+                                .fillMaxWidth(0.84f)
+                                .heightIn(min = 280.dp, max = 560.dp)
+                                .border(
+                                    width = 1.dp,
+                                    color = MaterialTheme.colorScheme.outlineVariant,
+                                    shape = RoundedCornerShape(20.dp)
+                                )
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) {}
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(18.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = DesktopIcons.Terminal,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Text(
+                                            text = "DOM Inspector & Page Source",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(
+                                            onClick = {
+                                                val cm = context.getSystemService(ClipboardManager::class.java)
+                                                cm?.setPrimaryClip(ClipData.newPlainText("Page Source", sourceDump))
+                                            },
+                                            shape = TopBarPillShape
+                                        ) {
+                                            Icon(DesktopIcons.Copy, contentDescription = null, modifier = Modifier.size(14.dp))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("Copy Source", style = MaterialTheme.typography.labelSmall)
+                                        }
+                                        WebWindowControlIcon(
+                                            icon = DesktopIcons.Close,
+                                            contentDescription = "Close Inspector",
+                                            hoverColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                            iconTint = MaterialTheme.colorScheme.onSurface,
+                                            onClick = { inspectSourceContent = null }
+                                        )
+                                    }
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f)
+                                ) {
+                                    Text(
+                                        text = sourceDump,
+                                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier
+                                            .verticalScroll(rememberScrollState())
+                                            .padding(12.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Error State Overlay Card
                 if (hasError) {
@@ -920,6 +1473,29 @@ private fun DesktopWebScreen(
             )
         }
     }
+}
+
+private fun decodeJsStringResult(rawJson: String?): String {
+    if (rawJson.isNullOrBlank() || rawJson == "null") return ""
+    val unwrapped = if (rawJson.length >= 2 && rawJson.startsWith("\"") && rawJson.endsWith("\"")) {
+        rawJson.substring(1, rawJson.length - 1)
+    } else {
+        rawJson
+    }
+    return unwrapped
+        .replace("\\n", "\n")
+        .replace("\\r", "\r")
+        .replace("\\t", "\t")
+        .replace("\\\"", "\"")
+        .replace("\\\\", "\\")
+}
+
+private fun escapeJsString(text: String): String {
+    return text
+        .replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace("\n", "\\n")
+        .replace("\r", "")
 }
 
 @Composable

@@ -476,18 +476,34 @@ internal fun DesktopTaskbar(
                         }
                         Icon(
                             imageVector = DesktopIcons.Wifi,
-                            contentDescription = "Network",
+                            contentDescription = "Network & Quick Settings",
                             tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(15.dp)
+                            modifier = Modifier
+                                .size(15.dp)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = onToggleSystemTray
+                                )
                         )
                         Icon(
                             imageVector = DesktopIcons.VolumeUp,
-                            contentDescription = "Audio",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(15.dp)
+                            contentDescription = "Audio Volume & Route Quick Settings",
+                            tint = if (isSystemTrayOpen) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                            modifier = Modifier
+                                .size(15.dp)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = onToggleSystemTray
+                                )
                         )
                         // Leaf-isolated battery & clock readouts so DesktopTaskbar never recomposes on ticks
-                        TaskbarBatteryReadout(context = context)
+                        TaskbarBatteryReadout(context = context, onClick = onToggleSystemTray)
                         TaskbarClockReadout()
                     }
                 }
@@ -616,12 +632,19 @@ private fun TaskbarCompactOtpChip(
 }
 
 @Composable
-private fun TaskbarBatteryReadout(context: Context) {
+private fun TaskbarBatteryReadout(context: Context, onClick: () -> Unit = {}) {
     val batteryPercent = rememberBatteryPercentage(context)
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onClick = onClick
+        )
+    ) {
         Icon(
             imageVector = DesktopIcons.Battery,
-            contentDescription = "Battery",
+            contentDescription = "Battery & Quick Settings",
             tint = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.size(16.dp)
         )

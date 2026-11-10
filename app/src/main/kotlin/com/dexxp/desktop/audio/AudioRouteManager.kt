@@ -163,6 +163,16 @@ class AudioRouteManager(context: Context) {
     }
 
     /**
+     * One-tap switcher between Phone Speaker (`PHONE_SPEAKER`) and
+     * External Monitor / Bluetooth (`HDMI_DISPLAYPORT` / `BLUETOOTH`).
+     */
+    fun togglePhoneAndExternalRoute(): AudioOutputRoute? {
+        val target = resolveOneTapAlternateRoute(_routes.value) ?: return null
+        selectRoute(target)
+        return target
+    }
+
+    /**
      * Opens the native Android SystemUI Media Output Switcher panel for non-privileged
      * `STREAM_MUSIC` A2DP/Speaker switching on strict OEM builds.
      */
@@ -257,6 +267,25 @@ class AudioRouteManager(context: Context) {
         private const val ACTION_SYSTEM_MEDIA_OUTPUT =
             "com.android.settings.panel.action.MEDIA_OUTPUT"
         private const val EXTRA_PACKAGE_NAME = "com.android.settings.panel.extra.PACKAGE_NAME"
+
+        /**
+         * Resolves the target route for the One-Tap Audio Route Switcher:
+         * - When Phone Speaker (`PHONE_SPEAKER`) is currently active, returns the primary
+         *   External HDMI / DisplayPort (`HDMI_DISPLAYPORT`) or Bluetooth (`BLUETOOTH`) route.
+         * - When an External / Bluetooth route is currently active, returns the Phone Speaker route.
+         */
+        fun resolveOneTapAlternateRoute(routes: List<AudioOutputRoute>): AudioOutputRoute? {
+            if (routes.size < 2) return routes.firstOrNull()
+            val current = routes.firstOrNull { it.isSelected } ?: routes.first()
+            return if (current.category == AudioEndpointCategory.PHONE_SPEAKER) {
+                routes.firstOrNull { it.category == AudioEndpointCategory.HDMI_DISPLAYPORT }
+                    ?: routes.firstOrNull { it.category == AudioEndpointCategory.BLUETOOTH }
+                    ?: routes.firstOrNull { it.category != AudioEndpointCategory.PHONE_SPEAKER }
+            } else {
+                routes.firstOrNull { it.category == AudioEndpointCategory.PHONE_SPEAKER }
+                    ?: routes.firstOrNull { it.deviceId != current.deviceId }
+            }
+        }
     }
 }
 
@@ -270,6 +299,9 @@ fun AudioRouteSwitcherSection(
     onOpenSystemOutputPanel: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val alternateRoute = AudioRouteManager.resolveOneTapAlternateRoute(routes)
+    val activeRoute = routes.firstOrNull { it.isSelected } ?: routes.firstOrNull()
+
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -284,17 +316,105 @@ fun AudioRouteSwitcherSection(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
-            Surface(
-                onClick = onOpenSystemOutputPanel,
-                shape = RoundedCornerShape(50),
-                color = MaterialTheme.colorScheme.surfaceContainerHighest
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text(
-                    text = "OS Mixer",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
-                )
+                if (alternateRoute != null && routes.size >= 2) {
+                    val switchLabel = when (alternateRoute.category) {
+                        AudioEndpointCategory.PHONE_SPEAKER -> "Switch to Phone"
+                        AudioEndpointCategory.HDMI_DISPLAYPORT -> "Switch to HDMI/DP"
+                        AudioEndpointCategory.BLUETOOTH -> "Switch to Bluetooth"
+                        AudioEndpointCategory.USB_OR_WIRED -> "Switch to USB/Wired"
+                    }
+                    Surface(
+                        onClick = { onSelectRoute(alternateRoute) },
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (alternateRoute.category == AudioEndpointCategory.PHONE_SPEAKER) {
+                                    DesktopIcons.Speaker
+                                } else {
+                                    DesktopIcons.Monitor
+                                },
+                                contentDescription = switchLabel,
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Text(
+                                text = switchLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+                }
+                Surface(
+                    onClick = onOpenSystemOutputPanel,
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest
+                ) {
+                    Text(
+                        text = "OS Mixer",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                    )
+                }
+            }
+        }
+
+        // Dedicated One-Tap Audio Route Toggle Pill (Phone Speaker <-> External HDMI/DP/Bluetooth)
+        if (alternateRoute != null && activeRoute != null && routes.size >= 2) {
+            Surface(
+                onClick = { onSelectRoute(alternateRoute) },
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = when (activeRoute.category) {
+                                AudioEndpointCategory.HDMI_DISPLAYPORT -> DesktopIcons.Monitor
+                                AudioEndpointCategory.PHONE_SPEAKER -> DesktopIcons.Speaker
+                                AudioEndpointCategory.BLUETOOTH -> DesktopIcons.Bluetooth
+                                AudioEndpointCategory.USB_OR_WIRED -> DesktopIcons.Headphones
+                            },
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "One-Tap Switch: ${activeRoute.name} → ${alternateRoute.name}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            maxLines = 1
+                        )
+                    }
+                    Icon(
+                        imageVector = DesktopIcons.ArrowRight,
+                        contentDescription = "Switch Audio Output",
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
         }
 

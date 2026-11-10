@@ -1,7 +1,10 @@
 package com.dexxp.desktop
 
 import android.content.pm.ActivityInfo
+import android.view.KeyEvent
 import android.view.MotionEvent
+import androidx.compose.ui.input.key.Key
+import com.dexxp.desktop.audio.AudioRouteManager
 import com.dexxp.desktop.bridge.CursorOverlayController
 import com.dexxp.desktop.bridge.PointerFocusBridge
 import com.dexxp.desktop.browser.DesktopWebActivity
@@ -12,6 +15,8 @@ import com.dexxp.desktop.launcher.AppLauncher
 import com.dexxp.desktop.launcher.AppRepository
 import com.dexxp.desktop.launcher.AppShortcutHelper
 import com.dexxp.desktop.model.AppWindowLaunchPolicy
+import com.dexxp.desktop.model.AudioEndpointCategory
+import com.dexxp.desktop.model.AudioOutputRoute
 import com.dexxp.desktop.model.ClipboardItemKind
 import com.dexxp.desktop.model.DesktopDpiScale
 import com.dexxp.desktop.model.PointerState
@@ -23,6 +28,7 @@ import com.dexxp.desktop.service.DisplayRouterService
 import com.dexxp.desktop.state.DesktopSessionRepository
 import com.dexxp.desktop.system.SystemFlagsInspector
 import com.dexxp.desktop.terminal.DesktopTerminalLauncher
+import com.dexxp.desktop.ui.desktop.computeStartMenuGridStep
 import com.dexxp.desktop.ui.desktop.hasPendingNotificationForDockPackage
 import com.dexxp.desktop.windowing.WindowSnappingController
 import com.dexxp.desktop.windowing.WindowTitlebarOverlayController
@@ -607,5 +613,105 @@ class DesktopDpiAndBoundsTest {
         assertTrue(PhoneScreenPowerController.isFirstTouchContactAction(MotionEvent.ACTION_POINTER_DOWN))
         assertFalse(PhoneScreenPowerController.isFirstTouchContactAction(MotionEvent.ACTION_MOVE))
         assertFalse(PhoneScreenPowerController.isFirstTouchContactAction(MotionEvent.ACTION_UP))
+    }
+
+    @Test
+    fun `desktop web zoom shortcuts and percentage clamping behave deterministically`() {
+        assertEquals(1, DesktopWebActivity.resolveZoomKeyAction(KeyEvent.KEYCODE_EQUALS, isCtrlPressed = true))
+        assertEquals(1, DesktopWebActivity.resolveZoomKeyAction(KeyEvent.KEYCODE_PLUS, isCtrlPressed = true))
+        assertEquals(-1, DesktopWebActivity.resolveZoomKeyAction(KeyEvent.KEYCODE_MINUS, isCtrlPressed = true))
+        assertEquals(0, DesktopWebActivity.resolveZoomKeyAction(KeyEvent.KEYCODE_0, isCtrlPressed = true))
+        assertNull(DesktopWebActivity.resolveZoomKeyAction(KeyEvent.KEYCODE_EQUALS, isCtrlPressed = false))
+
+        assertEquals(110, DesktopWebActivity.computeNextZoomPercent(100, stepDelta = 1))
+        assertEquals(90, DesktopWebActivity.computeNextZoomPercent(100, stepDelta = -1))
+        assertEquals(100, DesktopWebActivity.computeNextZoomPercent(160, stepDelta = 0))
+        assertEquals(DesktopWebActivity.MIN_ZOOM_PERCENT, DesktopWebActivity.computeNextZoomPercent(50, stepDelta = -3))
+        assertEquals(DesktopWebActivity.MAX_ZOOM_PERCENT, DesktopWebActivity.computeNextZoomPercent(300, stepDelta = 3))
+    }
+
+    @Test
+    fun `one-tap audio route switcher alternates between phone speaker and external monitor or bluetooth`() {
+        val hdmiRoute = AudioOutputRoute(
+            deviceId = 10,
+            name = "External Monitor (HDMI / DP)",
+            subtitle = "HDMI • Digital",
+            category = AudioEndpointCategory.HDMI_DISPLAYPORT,
+            androidDeviceType = 9,
+            isSelected = true
+        )
+        val phoneRoute = AudioOutputRoute(
+            deviceId = 20,
+            name = "Phone Stereo Speakers",
+            subtitle = "Built-in Speaker",
+            category = AudioEndpointCategory.PHONE_SPEAKER,
+            androidDeviceType = 2,
+            isSelected = false
+        )
+
+        // When HDMI is active -> One-Tap Switch selects Phone Speaker
+        val toPhone = AudioRouteManager.resolveOneTapAlternateRoute(listOf(hdmiRoute, phoneRoute))
+        assertNotNull(toPhone)
+        assertEquals(AudioEndpointCategory.PHONE_SPEAKER, toPhone?.category)
+
+        // When Phone Speaker is active -> One-Tap Switch selects HDMI / External
+        val toHdmi = AudioRouteManager.resolveOneTapAlternateRoute(
+            listOf(hdmiRoute.copy(isSelected = false), phoneRoute.copy(isSelected = true))
+        )
+        assertNotNull(toHdmi)
+        assertEquals(AudioEndpointCategory.HDMI_DISPLAYPORT, toHdmi?.category)
+    }
+
+    @Test
+    fun `start menu down arrow from search box selects first app and 2D arrows navigate grid`() {
+        // Pressing Down Arrow while in search box (!isGridActive) activates index 0
+        val firstDown = computeStartMenuGridStep(
+            currentIndex = 0,
+            isGridActive = false,
+            itemCount = 12,
+            columns = 5,
+            key = Key.DirectionDown
+        )
+        assertEquals(0 to true, firstDown)
+
+        // Pressing Down Arrow again moves down 1 row (+5 columns)
+        val secondDown = computeStartMenuGridStep(
+            currentIndex = firstDown.first,
+            isGridActive = firstDown.second,
+            itemCount = 12,
+            columns = 5,
+            key = Key.DirectionDown
+        )
+        assertEquals(5 to true, secondDown)
+
+        // Pressing Right Arrow advances by +1
+        val rightStep = computeStartMenuGridStep(
+            currentIndex = secondDown.first,
+            isGridActive = secondDown.second,
+            itemCount = 12,
+            columns = 5,
+            key = Key.DirectionRight
+        )
+        assertEquals(6 to true, rightStep)
+
+        // Pressing Up Arrow from row 1 (index 6) returns to row 0 (index 1)
+        val upToTopRow = computeStartMenuGridStep(
+            currentIndex = rightStep.first,
+            isGridActive = rightStep.second,
+            itemCount = 12,
+            columns = 5,
+            key = Key.DirectionUp
+        )
+        assertEquals(1 to true, upToTopRow)
+
+        // Pressing Up Arrow from row 0 returns active focus to the search box (isGridActive = false)
+        val backToSearch = computeStartMenuGridStep(
+            currentIndex = upToTopRow.first,
+            isGridActive = upToTopRow.second,
+            itemCount = 12,
+            columns = 5,
+            key = Key.DirectionUp
+        )
+        assertEquals(0 to false, backToSearch)
     }
 }

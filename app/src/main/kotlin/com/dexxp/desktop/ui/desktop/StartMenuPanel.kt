@@ -190,11 +190,8 @@ fun StartMenuPanel(
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
                     Key.Escape -> {
-                        if (contextMenuTargetKey != null) {
-                            contextMenuTargetKey = null
-                        } else {
-                            onDismiss()
-                        }
+                        contextMenuTargetKey = null
+                        onDismiss()
                         true
                     }
 
@@ -210,28 +207,31 @@ fun StartMenuPanel(
 
                     Key.DirectionDown -> {
                         if (filteredApps.isNotEmpty()) {
-                            val cols = gridColumnCount.coerceAtLeast(1)
-                            highlightedIndex = if (!isGridNavigationActive && highlightedIndex == 0 && filteredApps.size > cols) {
-                                cols.coerceAtMost(filteredApps.lastIndex)
-                            } else if (!isGridNavigationActive) {
-                                (highlightedIndex + 1).coerceAtMost(filteredApps.lastIndex)
-                            } else {
-                                (highlightedIndex + cols).coerceAtMost(filteredApps.lastIndex)
-                            }
-                            isGridNavigationActive = true
+                            val (nextIdx, nextGridActive) = computeStartMenuGridStep(
+                                currentIndex = highlightedIndex,
+                                isGridActive = isGridNavigationActive,
+                                itemCount = filteredApps.size,
+                                columns = gridColumnCount,
+                                key = event.key
+                            )
+                            highlightedIndex = nextIdx
+                            isGridNavigationActive = nextGridActive
                         }
                         true
                     }
 
                     Key.DirectionUp -> {
                         if (filteredApps.isNotEmpty()) {
-                            val cols = gridColumnCount.coerceAtLeast(1)
-                            if (highlightedIndex >= cols) {
-                                highlightedIndex = (highlightedIndex - cols).coerceAtLeast(0)
-                                isGridNavigationActive = true
-                            } else {
-                                highlightedIndex = 0
-                                isGridNavigationActive = false
+                            val (nextIdx, nextGridActive) = computeStartMenuGridStep(
+                                currentIndex = highlightedIndex,
+                                isGridActive = isGridNavigationActive,
+                                itemCount = filteredApps.size,
+                                columns = gridColumnCount,
+                                key = event.key
+                            )
+                            highlightedIndex = nextIdx
+                            isGridNavigationActive = nextGridActive
+                            if (!nextGridActive) {
                                 runCatching { focusRequester.requestFocus() }
                             }
                         }
@@ -240,8 +240,15 @@ fun StartMenuPanel(
 
                     Key.DirectionRight -> {
                         if (filteredApps.isNotEmpty() && (isGridNavigationActive || searchQuery.isEmpty())) {
-                            highlightedIndex = (highlightedIndex + 1).coerceAtMost(filteredApps.lastIndex)
-                            isGridNavigationActive = true
+                            val (nextIdx, nextGridActive) = computeStartMenuGridStep(
+                                currentIndex = highlightedIndex,
+                                isGridActive = isGridNavigationActive,
+                                itemCount = filteredApps.size,
+                                columns = gridColumnCount,
+                                key = event.key
+                            )
+                            highlightedIndex = nextIdx
+                            isGridNavigationActive = nextGridActive
                             true
                         } else {
                             false
@@ -250,8 +257,15 @@ fun StartMenuPanel(
 
                     Key.DirectionLeft -> {
                         if (filteredApps.isNotEmpty() && (isGridNavigationActive || searchQuery.isEmpty())) {
-                            highlightedIndex = (highlightedIndex - 1).coerceAtLeast(0)
-                            isGridNavigationActive = true
+                            val (nextIdx, nextGridActive) = computeStartMenuGridStep(
+                                currentIndex = highlightedIndex,
+                                isGridActive = isGridNavigationActive,
+                                itemCount = filteredApps.size,
+                                columns = gridColumnCount,
+                                key = event.key
+                            )
+                            highlightedIndex = nextIdx
+                            isGridNavigationActive = nextGridActive
                             true
                         } else {
                             false
@@ -260,7 +274,7 @@ fun StartMenuPanel(
 
                     Key.Enter,
                     Key.NumPadEnter -> {
-                        val target = filteredApps.getOrNull(highlightedIndex)
+                        val target = filteredApps.getOrNull(highlightedIndex) ?: filteredApps.firstOrNull()
                         if (target != null) {
                             onLaunchApp(target, null, false)
                             true
@@ -905,3 +919,45 @@ fun Modifier.desktopSecondaryClick(onSecondaryClick: () -> Unit): Modifier =
             }
         }
     }
+
+internal fun computeStartMenuGridStep(
+    currentIndex: Int,
+    isGridActive: Boolean,
+    itemCount: Int,
+    columns: Int,
+    key: Key
+): Pair<Int, Boolean> {
+    if (itemCount <= 0) return 0 to false
+    val lastIndex = itemCount - 1
+    val cols = columns.coerceAtLeast(1)
+    val safeCurrent = currentIndex.coerceIn(0, lastIndex)
+
+    return when (key) {
+        Key.DirectionDown -> {
+            if (!isGridActive) {
+                0 to true
+            } else {
+                (safeCurrent + cols).coerceAtMost(lastIndex) to true
+            }
+        }
+        Key.DirectionUp -> {
+            if (isGridActive && safeCurrent >= cols) {
+                (safeCurrent - cols).coerceAtLeast(0) to true
+            } else {
+                0 to false
+            }
+        }
+        Key.DirectionRight -> {
+            val next = if (!isGridActive) {
+                (safeCurrent + 1).coerceAtMost(lastIndex)
+            } else {
+                (safeCurrent + 1).coerceAtMost(lastIndex)
+            }
+            next to true
+        }
+        Key.DirectionLeft -> {
+            (safeCurrent - 1).coerceAtLeast(0) to true
+        }
+        else -> safeCurrent to isGridActive
+    }
+}

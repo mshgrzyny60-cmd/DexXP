@@ -301,10 +301,14 @@ class DesktopSessionRepository(context: Context) {
         prefs.edit().putString(KEY_WALLPAPER, preset.name).apply()
     }
 
-    fun setExternalBrightness(fraction: Float) {
+    fun setExternalBrightness(fraction: Float, persistImmediately: Boolean = true) {
         val clamped = fraction.coerceIn(0.20f, 1.0f)
-        _externalBrightnessFraction.value = clamped
-        prefs.edit().putFloat(KEY_EXTERNAL_BRIGHTNESS, clamped).apply()
+        if (kotlin.math.abs(_externalBrightnessFraction.value - clamped) >= 0.004f) {
+            _externalBrightnessFraction.value = clamped
+        }
+        if (persistImmediately) {
+            prefs.edit().putFloat(KEY_EXTERNAL_BRIGHTNESS, clamped).apply()
+        }
     }
 
     fun setTouchpadSensitivity(sensitivity: Float) {

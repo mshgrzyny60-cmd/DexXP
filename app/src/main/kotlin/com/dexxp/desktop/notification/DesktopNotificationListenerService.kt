@@ -56,8 +56,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -85,6 +87,7 @@ import com.dexxp.desktop.model.WindowSnapMode
 import com.dexxp.desktop.ui.icons.DesktopIcons
 import com.dexxp.desktop.ui.theme.StatusAmber
 import com.dexxp.desktop.ui.theme.StatusGreen
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -217,6 +220,7 @@ class DesktopNotificationListenerService : NotificationListenerService() {
 
         val optionsBundle = ActivityOptions.makeBasic().apply {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                @Suppress("DEPRECATION")
                 setPendingIntentBackgroundActivityStartMode(
                     ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
                 )
@@ -651,10 +655,37 @@ fun QuickSettingsFlyout(
     val maxVolume = remember(audioManager) {
         audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
     }
+    var lastAppliedVolumeStep by remember(audioManager) {
+        mutableIntStateOf(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).coerceIn(0, maxVolume))
+    }
     var volumeFraction by remember {
         mutableFloatStateOf(
-            audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / maxVolume.toFloat()
+            lastAppliedVolumeStep.toFloat() / maxVolume.toFloat()
         )
+    }
+    var localBrightnessFraction by remember(externalBrightnessFraction) {
+        mutableFloatStateOf(externalBrightnessFraction.coerceIn(0.20f, 1.0f))
+    }
+
+    // Debounced system volume update (`AudioManager.STREAM_MUSIC`) to prevent UI-thread IPC stalls on 120Hz/240Hz drag
+    LaunchedEffect(volumeFraction) {
+        val targetStep = (volumeFraction * maxVolume).roundToInt().coerceIn(0, maxVolume)
+        if (targetStep != lastAppliedVolumeStep) {
+            delay(24L)
+            lastAppliedVolumeStep = targetStep
+            runCatching {
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetStep, 0)
+            }
+        }
+    }
+
+    // Debounced brightness persistence & system brightness write to eliminate drag jank
+    LaunchedEffect(localBrightnessFraction) {
+        if (kotlin.math.abs(localBrightnessFraction - externalBrightnessFraction) >= 0.005f) {
+            delay(32L)
+            onChangeBrightness(localBrightnessFraction)
+            applySystemBrightnessIfPermitted(context, localBrightnessFraction)
+        }
     }
 
     Surface(
@@ -707,7 +738,7 @@ fun QuickSettingsFlyout(
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
-            // Display Brightness Slider (External Luminance + System Brightness if granted)
+            // External Monitor Brightness Slider (External Luminance + System Brightness if granted)
             Column {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -723,28 +754,31 @@ fun QuickSettingsFlyout(
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            text = "Display Brightness",
+                            text = "External Monitor Brightness",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                     Text(
-                        text = "${(externalBrightnessFraction * 100).roundToInt()}%",
+                        text = "${(localBrightnessFraction * 100).roundToInt()}%",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
                 Slider(
-                    value = externalBrightnessFraction,
+                    value = localBrightnessFraction,
                     valueRange = 0.20f..1.0f,
                     onValueChange = { value ->
-                        onChangeBrightness(value)
-                        applySystemBrightnessIfPermitted(context, value)
+                        localBrightnessFraction = value.coerceIn(0.20f, 1.0f)
+                    },
+                    onValueChangeFinished = {
+                        onChangeBrightness(localBrightnessFraction)
+                        applySystemBrightnessIfPermitted(context, localBrightnessFraction)
                     }
                 )
             }
 
-            // Media Volume Control Slider
+            // Media Volume Control Slider (`AudioManager.STREAM_MUSIC`)
             Column {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -774,8 +808,11 @@ fun QuickSettingsFlyout(
                 Slider(
                     value = volumeFraction,
                     onValueChange = { fraction ->
-                        volumeFraction = fraction
-                        val target = (fraction * maxVolume).roundToInt().coerceIn(0, maxVolume)
+                        volumeFraction = fraction.coerceIn(0f, 1f)
+                    },
+                    onValueChangeFinished = {
+                        val target = (volumeFraction * maxVolume).roundToInt().coerceIn(0, maxVolume)
+                        lastAppliedVolumeStep = target
                         runCatching {
                             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
                         }
