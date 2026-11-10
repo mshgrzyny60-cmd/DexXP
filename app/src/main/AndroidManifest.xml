@@ -99,7 +99,8 @@
             android:exported="true"
             android:label="@string/secondary_home_label"
             android:launchMode="singleTask"
-            android:resizeableActivity="false"
+            android:resizeableActivity="true"
+            android:showForAllUsers="true"
             android:supportsPictureInPicture="false"
             android:stateNotNeeded="true"
             android:theme="@style/Theme.DexXP">
